@@ -51,7 +51,7 @@ def search_catalog(query="", store=None, occasion="", max_price=None,
                    category="", include_demo=False, limit=48):
     """Catálogo publicado; cada resultado declara su tienda y su estado."""
     parsed = parse_query(query) if query else {"text": "", "max_price": None, "occasion": None}
-    max_price = max_price or parsed["max_price"]
+    max_price = max_price if max_price is not None else parsed["max_price"]
     occasion = occasion or parsed["occasion"] or ""
     # F06: la visibilidad es la política CENTRALIZADA (negocio + tienda +
     # publicación), no un filtro local de esta vista.

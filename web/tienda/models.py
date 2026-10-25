@@ -236,7 +236,7 @@ class OrderEvent(models.Model):
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="events")
     field = models.CharField(max_length=30)
     from_value = models.CharField(max_length=20)
-    to_value = models.CharField(max_length=20)
+    to_value = models.CharField(max_length=120)
     note = models.CharField(max_length=200, blank=True)
     by = models.ForeignKey(
         "auth.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"

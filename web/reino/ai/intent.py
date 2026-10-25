@@ -9,6 +9,7 @@ declara: nunca excluye el envío para aparentar cumplimiento.
 
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
+import re
 
 CONTRACT_VERSION = "intent-v1"
 CURRENCIES = {"USD"}
@@ -36,7 +37,7 @@ class IntentContract:
 def _dec(value):
     try:
         d = Decimal(str(value))
-        return d if d > 0 else None
+        return d if d.is_finite() and 0 < d <= 100000 else None
     except (InvalidOperation, TypeError, ValueError):
         return None
 
@@ -51,7 +52,7 @@ def validate(payload: dict) -> tuple[IntentContract, list[str]]:
         return IntentContract(), ["la intención debe ser un objeto"]
 
     c = IntentContract()
-    c.query = str(payload.get("query") or "")[:300]
+    c.query = str(payload.get("query") or "")[:8000]
     ids = payload.get("category_ids") or []
     if isinstance(ids, list):
         c.category_ids = [str(i)[:60] for i in ids][:8]
@@ -73,10 +74,14 @@ def validate(payload: dict) -> tuple[IntentContract, list[str]]:
     else:
         c.currency = currency
 
-    c.must_have = [str(x)[:60] for x in (payload.get("must_have") or [])][:8]
+    for name in ("must_have", "excluded"):
+        value = payload.get(name) or []
+        if not isinstance(value, list):
+            errors.append(f"{name} debe ser una lista")
+        else:
+            setattr(c, name, [str(x)[:60] for x in value][:8])
     if isinstance(payload.get("preferences"), dict):
         c.preferences = {str(k)[:40]: v for k, v in list(payload["preferences"].items())[:12]}
-    c.excluded = [str(x)[:60] for x in (payload.get("excluded") or [])][:8]
     c.recipient_ref = str(payload.get("recipient_ref") or "")[:40]
     c.destination_scope = str(payload.get("destination_scope") or "")[:80]
     c.requested_date = str(payload.get("requested_date") or "")[:20]
@@ -98,12 +103,26 @@ def intent_from_text(text, store_slug=""):
     """
     from .. import services_search as search
     parsed = search.parse_query(text or "")
+    normalized = search.normalize(text or "")
     payload = {"query": text, "store_scope": store_slug}
     if parsed.get("max_price") is not None:
         payload["budget"] = str(parsed["max_price"])
         payload["budget_scope"] = "products"
+    # A bare amount is meaningful only with a budget cue; measurements and
+    # product quantities must never become monetary constraints.
+    amounts = re.findall(r"(?:menos de|hasta|maximo|max|presupuesto(?: de)?|no mas de)\s*\$?\s*(\d+(?:[.,]\d{1,2})?)", normalized)
+    if amounts:
+        payload["budget"] = str(min(Decimal(a.replace(",", ".")) for a in amounts))
+    if re.search(r"en total|presupuesto total|conjunto|inclu\w* (?:el )?envio", normalized):
+        payload["budget_scope"] = "total"
     if parsed.get("category"):
         payload["category_ids"] = [parsed["category"]]
     if parsed.get("must_have"):
         payload["must_have"] = parsed["must_have"]
-    return validate(payload)
+    contract, errors = validate(payload)
+    minimum = re.search(r"(?:minimo|al menos)\s*\$\s*(\d+(?:[.,]\d{1,2})?)", normalized)
+    if minimum and contract.budget is not None and Decimal(minimum.group(1).replace(",", ".")) > contract.budget:
+        errors.append("Los límites de presupuesto se contradicen; confirmá el máximo que querés gastar.")
+    if len({Decimal(a.replace(",", ".")) for a in amounts}) > 1:
+        errors.append("Mencionaste varios máximos; confirmá cuál es tu presupuesto.")
+    return contract, errors

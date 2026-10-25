@@ -1,6 +1,6 @@
 {% load static %}
-{# Tarjeta de tienda con identidad propia (P02): portada, logo-letra, nombre,
-   categoría, frase y muestra de productos reales. La demo se identifica. #}
+{% comment %} Tarjeta de tienda con identidad propia (P02): portada, logo-letra, nombre,
+   categoría, frase y muestra de productos reales. La demo se identifica. {% endcomment %}
 <article class="store-card">
     <a href="{% url 'reino_store_home' store.slug %}" style="text-decoration:none;color:inherit">
         <div class="store-card__cover {% if store.slug == 'wiener-kingdom' %}scene--pink{% elif store.is_demo %}scene--lilac{% else %}scene--cream{% endif %} scene">

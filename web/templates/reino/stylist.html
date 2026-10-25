@@ -30,10 +30,10 @@
             <div class="chat__cards">
                 {% for card in msg.cards %}
                 <article class="card">
-                    {% if card.image %}<div class="card__media"><img src="{% static card.image %}" alt="{{ card.alt }}" loading="lazy"></div>{% endif %}
+                    {% if card.image_url %}<div class="card__media"><img src="{{ card.image_url }}" alt="{{ card.alt }}" loading="lazy"></div>{% elif card.image %}<div class="card__media"><img src="{% static card.image %}" alt="{{ card.alt }}" loading="lazy"></div>{% endif %}
                     <div class="card__body">
                         <h3 class="card__title">{{ card.title }}</h3>
-                        <p class="card__price">{{ card.price }}</p>
+                        <p class="card__price">{% if card.price_kind == "from" %}Desde {% endif %}{{ card.price }}{% if card.option %} · {{ card.option }}{% endif %}</p>
                         {% if card.fit_label %}<p class="mb-0"><span class="fit fit--{{ card.fit_state }}">{{ card.fit_label }}</span></p>{% endif %}
                         <div class="card__footer">
                             <a class="btn btn--secondary btn--sm" href="{% url 'reino_product' reino_store.slug card.slug %}">Ver</a>
@@ -61,16 +61,16 @@
         {% csrf_token %}
         <input type="hidden" name="memory_off" value="{% if memory_off %}0{% else %}1{% endif %}">
         <button class="btn btn--ghost" type="submit" style="padding:.25rem .75rem;font-size:.85rem">
-            {% if memory_off %}◉ «Sin guardar» activo — desactivar{% else %}○ Activar modo «sin guardar»{% endif %}
+            {% if memory_off %}Guardar historial a partir de ahora{% else %}Dejar de guardar el historial{% endif %}
         </button>
         {% if memory_off %}
-        <span>Esta conversación no se guarda ni alimenta tu perfil.</span>
+        <span>Sin guardar: el asesor recibe solo tu mensaje actual. Activá el historial si querés continuar una conversación.</span>
         {% endif %}
     </form>
     <form class="chat__form" data-chat-form method="post" action="{% url 'reino_stylist_message' reino_store.slug %}">
         {% csrf_token %}
         <label for="msg" style="position:absolute;left:-9999px">Tu mensaje al asesor</label>
-        <input id="msg" name="message" maxlength="500" autocomplete="off"
+        <input id="msg" name="message" maxlength="8000" autocomplete="off"
                placeholder="Por ejemplo: algo elegante para Bruno, máximo $80">
         <button class="btn btn--primary" type="submit">Enviar</button>
         <button class="btn btn--ghost" type="button" data-chat-cancel hidden>Cancelar</button>

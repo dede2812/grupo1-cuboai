@@ -6,7 +6,7 @@ suministrado por el modelo de IA ni por el cliente sin validar.
 
 from django.http import Http404
 
-from .models import Merchant, Store
+from .models import CustomerIdentity, Merchant, Store
 
 SESSION_PROFILE = "reino_profile"      # {store_slug: profile_public_id}
 SESSION_CART = "reino_cart"            # {store_slug: cart_public_id}
@@ -33,6 +33,18 @@ def ensure_session(request):
     """Garantiza una session_key estable (propietario de carritos y perfiles)."""
     if not request.session.session_key:
         request.session.create()
+    return owner_key(request)
+
+
+def owner_key(request):
+    """Keep guest ownership unchanged; signed-in buyers use a durable UUID."""
+    user = getattr(request, "user", None)
+    if user is not None and user.is_authenticated:
+        identity = getattr(request, "_customer_identity", None)
+        if identity is None or identity.user_id != user.pk:
+            identity, _ = CustomerIdentity.objects.get_or_create(user=user)
+            request._customer_identity = identity
+        return identity.owner_key
     return request.session.session_key
 
 

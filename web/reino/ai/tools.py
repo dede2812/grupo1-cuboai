@@ -6,7 +6,8 @@ idempotente vía servicios de comercio. No existe herramienta para fijar
 precios, confirmar cobros, reembolsar, enviar marketing ni SQL libre.
 """
 
-from decimal import Decimal
+import logging
+from decimal import Decimal, InvalidOperation
 
 from django.db import transaction
 from django.utils import timezone
@@ -19,6 +20,44 @@ from ..models import (
 )
 from ..money import fmt
 from ..services_recommend import normalize_intent, recommend
+from .schemas import TOOL_SPECS
+
+logger = logging.getLogger(__name__)
+
+
+def valid_arguments(name, args, *, proposing=False):
+    """Enforce the tool contract before touching any model/queryset."""
+    if not isinstance(args, dict):
+        return False
+    if name == "add_item_to_cart" and not proposing:
+        return (set(args) <= {"action_id", "variant_id", "quantity"}
+                and isinstance(args.get("action_id", ""), str)
+                and len(args.get("action_id", "")) <= 64)
+    spec = next((t["function"]["parameters"] for t in TOOL_SPECS if t["function"]["name"] == name), None)
+    if spec is None or set(args) - set(spec["properties"]) or any(k not in args for k in spec.get("required", [])):
+        return False
+    for key, value in args.items():
+        field = spec["properties"][key]
+        kind = field["type"]
+        if kind == "string" and (not isinstance(value, str) or len(value) > field.get("maxLength", 200)):
+            return False
+        if kind == "array" and (not isinstance(value, list) or len(value) > field.get("maxItems", 6)
+                                or any(not isinstance(item, str) or len(item) > 80 for item in value)):
+            return False
+        if kind in ("number", "integer"):
+            if isinstance(value, bool) or not isinstance(value, (int, float, Decimal)):
+                return False
+            try:
+                number = Decimal(str(value))
+                if not number.is_finite() or number <= 0 or number > field.get("maximum", 100000):
+                    return False
+                if kind == "integer" and number != number.to_integral_value():
+                    return False
+            except InvalidOperation:
+                return False
+        if "enum" in field and value not in field["enum"]:
+            return False
+    return True
 
 
 class ToolContext:
@@ -31,14 +70,19 @@ class ToolContext:
         self.cart = cart
 
 
-def _card(product, reasons=(), fit=None):
+def _card(product, reasons=(), fit=None, variant=None):
     image = product.media.first()
+    prices = [v.price for v in product.variants.filter(is_active=True, stock__gt=0)]
     return {
         "product_id": str(product.public_id),
         "slug": product.slug,
         "title": product.short_title,
-        "price": fmt(product.base_price, product.store.currency),
+        "price": fmt(variant.price if variant else min(prices) if prices else product.base_price, product.store.currency),
+        "price_kind": "exact" if variant else "from", "available": bool(prices),
+        "variant_id": str(variant.public_id) if variant else None,
+        "option": variant.option_label if variant else "",
         "image": image.path if image else "",
+        "image_url": image.url if image else "",
         "alt": image.alt if image else product.short_title,
         "reason_codes": list(reasons),
         "fit_state": fit["state"] if fit else None,
@@ -51,35 +95,56 @@ def run_tool(name, args, ctx: ToolContext):
     handler = _HANDLERS.get(name)
     if handler is None:
         return {"error": "tool_not_allowed"}
+    if not valid_arguments(name, args):
+        return {"error": "invalid_arguments"}
+    args = dict(args)
+    contract = getattr(ctx, "intent", None)
+    if contract and contract.budget is not None:
+        if name in ("search_products", "recommend_products"):
+            field = "max_price" if name == "search_products" else "budget"
+            args[field] = min(Decimal(str(args.get(field, contract.budget))), contract.budget)
+            if name == "recommend_products":
+                args["budget_scope"] = contract.budget_scope
+    if ctx.profile is not None and (ctx.profile.store_id != ctx.store.pk or ctx.profile.session_key != ctx.session_key):
+        return {"error": "invalid_context"}
+    if ctx.cart is not None and (ctx.cart.store_id != ctx.store.pk or ctx.cart.session_key != ctx.session_key):
+        return {"error": "invalid_context"}
     try:
-        return handler(args or {}, ctx)
+        return handler(args, ctx)
     except Exception as exc:  # la herramienta falla en cerrado y con mensaje útil
-        return {"error": "tool_error", "detail": str(exc)[:200]}
+        logger.warning("ai_tool_failed tool=%s error_type=%s", name, type(exc).__name__)
+        return {"error": "tool_error"}
 
 
 def _search_products(args, ctx):
-    qs = visibility.visible_products(store=ctx.store)
-    query = (args.get("query") or "").lower().strip()
+    from ..services_search import normalize
+    qs = visibility.visible_products(store=ctx.store).filter(variants__is_active=True, variants__stock__gt=0).distinct()
+    query = normalize(args.get("query") or "").strip()
     if query:
-        qs = [p for p in qs if query in p.title.lower()
-              or query in p.short_title.lower()
-              or query in (p.description or "").lower()]
+        qs = [p for p in qs if query in normalize(p.title)
+              or query in normalize(p.short_title)
+              or query in normalize(p.description or "")]
     if args.get("category"):
         qs = [p for p in qs if p.category == args["category"]]
     if args.get("occasion"):
         qs = [p for p in qs if args["occasion"] in (p.occasions or [])]
     if args.get("max_price"):
-        qs = [p for p in qs if p.base_price <= Decimal(str(args["max_price"]))]
+        qs = [p for p in qs if any(v.price <= Decimal(str(args["max_price"]))
+                                  for v in p.variants.filter(is_active=True, stock__gt=0))]
     return {"products": [_card(p) for p in list(qs)[:6]]}
 
 
 def _get_product_details(args, ctx):
     out = []
     for pid in (args.get("product_ids") or [])[:6]:
-        p = Product.objects.filter(store=ctx.store, public_id=pid,
-                                   status=Product.Status.PUBLISHED).first()
+        p = visibility.visible_products(store=ctx.store).filter(public_id=pid).first()
         if p is None:
             continue  # IDs desconocidos no se hidratan (fail-closed)
+        contract = getattr(ctx, "intent", None)
+        if contract and contract.budget is not None and not any(
+            v.price <= contract.budget for v in p.variants.filter(is_active=True, stock__gt=0)
+        ):
+            continue
         out.append({
             **_card(p),
             "description": p.description,
@@ -95,8 +160,8 @@ def _get_product_details(args, ctx):
 
 
 def _check_inventory(args, ctx):
-    v = Variant.objects.filter(public_id=args.get("variant_id"),
-                               product__store=ctx.store).first()
+    v = Variant.objects.filter(public_id=args.get("variant_id"), is_active=True,
+                               product__in=visibility.visible_products(store=ctx.store)).first()
     if v is None:
         return {"error": "unknown_variant"}
     qty = int(args.get("quantity") or 1)
@@ -107,14 +172,13 @@ def _check_inventory(args, ctx):
 def _calculate_smart_fit(args, ctx):
     from decimal import Decimal as D
 
-    p = Product.objects.filter(store=ctx.store, public_id=args.get("product_id"),
-                               status=Product.Status.PUBLISHED).first()
+    p = visibility.visible_products(store=ctx.store).filter(public_id=args.get("product_id")).first()
     if p is None:
         return {"error": "unknown_product"}
     chest = D(str(args["chest_cm"])) if args.get("chest_cm") else None
     neck = D(str(args["neck_cm"])) if args.get("neck_cm") else None
     back = D(str(args["back_cm"])) if args.get("back_cm") else None
-    if chest is None and ctx.profile is not None:
+    if all(args.get(k) is None for k in ("chest_cm", "neck_cm", "back_cm")) and ctx.profile is not None:
         # Solo memoria con consentimiento vigente (R07).
         m = services_memory.authorized_measurement(ctx.store, ctx.session_key, ctx.profile)
         if m:
@@ -134,10 +198,17 @@ def _recommend_products(args, ctx):
         profile=ctx.profile, needs_fit=ctx.store.category == "moda canina",
     )
     result = recommend(ctx.store, intent, measurement=measurement, kind="stylist")
+    selected, total = [], Decimal("0")
+    for entry in result["selection"]:
+        price = entry["price"]
+        if intent["budget_scope"] == "total" and intent["budget"] is not None and total + price > intent["budget"]:
+            continue
+        selected.append(entry)
+        total += price
     return {
         "selection": [
-            {**_card(e["product"], e["reasons"]), "score": e["score"]}
-            for e in result["selection"]
+            {**_card(e["product"], e["reasons"], fit=e["fit"], variant=e["variant"]), "score": e["score"]}
+            for e in selected
         ],
         "excluded": result["excluded"],
         "engine_version": result["engine_version"],
@@ -209,15 +280,14 @@ def _add_item_to_cart(args, ctx):
         payload = token.payload
         # Destinatario vinculado a la propuesta (N09).
         bound_profile = payload.get("profile_id")
-        if bound_profile:
-            current_profile = ctx.profile.id if ctx.profile is not None else None
-            if current_profile != bound_profile:
-                return {"error": "action_recipient_changed",
-                        "detail": "El destinatario cambió; pedí una nueva propuesta."}
+        current_profile = ctx.profile.id if ctx.profile is not None else None
+        if current_profile != bound_profile:
+            return {"error": "action_recipient_changed",
+                    "detail": "El destinatario cambió; pedí una nueva propuesta."}
 
         v = Variant.objects.select_for_update().filter(
             public_id=payload.get("variant_id"), product__store=ctx.store,
-            is_active=True).first()
+            is_active=True, product__in=visibility.visible_products(store=ctx.store)).first()
         if v is None:
             return {"error": "unknown_variant"}
         # Cotización vinculada (N10): precio/moneda/variante/cantidad aprobados.
@@ -243,6 +313,12 @@ def _add_item_to_cart(args, ctx):
         token.result = result
         token.executed_at = timezone.now()
         token.save(update_fields=["status", "result", "executed_at"])
+        from .. import services_analytics
+        services_analytics.track(
+            "advisor_action_confirmed", store=ctx.store, session_key=ctx.session_key,
+            request_id="advisor:" + token.action_id,
+            cart=str(cart.public_id), variant=str(v.public_id), action="add_to_cart",
+        )
         return result
 
 

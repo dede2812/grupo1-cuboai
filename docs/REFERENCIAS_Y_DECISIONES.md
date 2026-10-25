@@ -1,3 +1,5 @@
+> Registro histórico conservado. Las decisiones añadidas en la fase final figuran al final; para estado de proveedores y alcance vigente usar [Trazabilidad](15_ESTADO_FINAL_Y_TRAZABILIDAD.md).
+
 # Referencias y decisiones de implementación
 
 Fecha de consulta: 2026-10-22/23 (sandbox Fluso).
@@ -52,3 +54,26 @@ Fecha de consulta: 2026-10-22/23 (sandbox Fluso).
 9. Fraunces+Manrope (OFL) vendoradas localmente tras verificar licencia — sin CDN en runtime.
 10. Ninguna dependencia nueva en `requirements.txt` para la IA (urllib estándar): superficie
     de instalación idéntica a la histórica.
+
+
+## Decisiones de la fase final
+
+1. Continuar exactamente el fork/rama/commit indicado por el usuario: Fluso
+   `feature/fluso-kingdom-mvp`, `2ca48413`; no reconstruir desde main.
+2. Conservar Django, plantillas y servicios. Gráficas SVG locales sin dependencias
+   de frontend nuevas; tabla accesible como alternativa al gráfico.
+3. Reportar cohortes de pedidos a estado actual, con períodos iguales. No llamar
+   flujo de caja a importes agrupados por fecha de creación.
+4. Seleccionar pedidos completos al filtrar producto/categoría. No repartir
+   descuentos, reembolsos o impuestos sin datos de línea que lo permitan.
+5. Exigir acción confirmada, mismo carrito y variante realmente comprada para
+   atribuir asistencia al asesor; no atribuir por apertura de chat.
+6. Persistir identidad de compradores autenticados sin convertir la sesión de
+   navegador en credencial de otro usuario. Importación invitada explícita.
+7. Mantener adaptadores reales separados del dominio y estados externos no
+   verificados claramente identificados. Pruebas HTTP controladas no equivalen
+   a una transacción sandbox real.
+8. Conservar informes anteriores como historia y consolidar el cierre en docs12,
+   docs15 y docs16. No reemplazar resultados fallidos con conteos de otra ronda.
+9. Mantener el backend centralizado para cualquier experiencia instalable futura;
+   no distribuir un SQLite independiente ni secretos por comprador.

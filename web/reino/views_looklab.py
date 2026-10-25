@@ -8,13 +8,18 @@
 """
 
 from decimal import Decimal, InvalidOperation
+from datetime import timedelta
+import uuid
 
+from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.shortcuts import redirect, render
+from django.utils import timezone
 from django.views.decorators.http import require_POST
 
 from . import services_analytics
 from . import services_fit, services_memory, tenancy
-from .models import Consent, Product, Variant
+from .models import ActionToken, Consent, Product, Variant
 from .services_recommend import compose_bundle, normalize_intent, recommend, variants_with_fit
 from .views_storefront import _store_view
 
@@ -41,18 +46,23 @@ def _step(request, store):
 @_store_view
 def looklab(request, store):
     """Pantalla principal del flujo (una URL, pasos por ?paso=)."""
-    session_key = request.session.session_key
+    session_key = tenancy.owner_key(request)
     draft = tenancy.looklab_draft(request, store)
     step = _step(request, store)
     errors = {}
-    if step == 1 and request.method == "GET":
+    if not draft.get("flow_id"):
+        draft["flow_id"] = uuid.uuid4().hex
+        tenancy.set_looklab_draft(request, store, draft)
+    if step == "perfil" and request.method == "GET":
         services_analytics.track("looklab_started", store=store,
+                                 request_id="look-start:" + draft["flow_id"],
                                  session_key=session_key or "")
 
     if request.method == "POST":
         action = request.POST.get("action", "")
         if action == "perfil":
             profile_id = request.POST.get("profile_id", "")
+            old_profile_id = draft.get("profile_id")
             if profile_id == "new":
                 alias = request.POST.get("alias", "").strip()
                 if not alias:
@@ -75,12 +85,17 @@ def looklab(request, store):
                     tenancy.set_active_profile(request, store, profile.public_id)
                     draft["profile_id"] = str(profile.public_id)
             if not errors:
+                if draft.get("profile_id") != old_profile_id:
+                    for key in ("converted", "measurement_saved", "chest", "neck", "back"):
+                        draft.pop(key, None)
                 draft["step"] = "medidas"
                 tenancy.set_looklab_draft(request, store, draft)
                 return redirect(f"{request.path}?paso=medidas")
 
         elif action == "medidas":
             unit = request.POST.get("unit", "cm")
+            if unit not in ("cm", "in"):
+                errors["chest"] = "Elegí centímetros o pulgadas."
             draft["unit"] = unit
             converted = {}
             for field in ("chest", "neck", "back"):
@@ -136,14 +151,15 @@ def looklab(request, store):
             if budget_raw:
                 try:
                     budget = Decimal(budget_raw)
-                    if budget <= 0 or budget > Decimal("100000"):
+                    if not budget.is_finite() or budget <= 0 or budget > Decimal("100000"):
                         raise InvalidOperation
                 except InvalidOperation:
                     errors["budget"] = "Ingresá un presupuesto válido (opcional)."
             if not errors:
                 draft["occasion"] = occasion
                 draft["budget"] = str(budget) if budget else None
-                draft["budget_scope"] = request.POST.get("budget_scope", "products")
+                scope = request.POST.get("budget_scope", "products")
+                draft["budget_scope"] = scope if scope in ("products", "total") else "products"
                 draft["step"] = "revelacion"
                 tenancy.set_looklab_draft(request, store, draft)
                 return redirect(f"{request.path}?paso=revelacion")
@@ -167,7 +183,7 @@ def _draft_profile(request, store, draft):
     pid = draft.get("profile_id")
     if not pid:
         return None
-    return services_memory.get_profile(store, request.session.session_key, pid)
+    return services_memory.get_profile(store, tenancy.owner_key(request), pid)
 
 
 class _DraftMeasurement:
@@ -206,7 +222,7 @@ def _pick_variant(product, measurement, needs_fit):
     rows, fit = variants_with_fit(product, measurement)
     in_stock = [r for r in rows if r["variant"].stock > 0]
     if not needs_fit:
-        chosen = in_stock[0]["variant"] if in_stock else None
+        chosen = min((r["variant"] for r in in_stock), key=lambda v: (v.price, v.pk)) if in_stock else None
         return chosen, fit, rows, False
     if fit is None or fit["state"] == "sin_datos":
         # Sin medidas: la talla queda pendiente; la elección es explícita.
@@ -216,7 +232,7 @@ def _pick_variant(product, measurement, needs_fit):
     suggested = [r for r in rows if r["fit_hint"] == "sugerida"]
     available_suggested = [r for r in suggested if r["variant"].stock > 0]
     if available_suggested:
-        return available_suggested[0]["variant"], fit, rows, False
+        return min((r["variant"] for r in available_suggested), key=lambda v: (v.price, v.pk)), fit, rows, False
     if suggested:
         # La talla compatible existe pero está agotada: NO ofrecer otra (R08).
         return None, fit, rows, True
@@ -227,7 +243,8 @@ def _pick_variant(product, measurement, needs_fit):
 def _reveal(request, store, draft, profile):
     if request is not None:  # las pruebas de unidad llaman con request=None
         services_analytics.track("looklab_completed", store=store,
-                                 session_key=request.session.session_key or "")
+                                 request_id="look-complete:" + draft["flow_id"],
+                                 session_key=tenancy.owner_key(request) or "")
     """Calcula la revelación: UNA pieza principal + complementos coherentes.
 
     - Precedencia de medidas de esta visita sobre las guardadas (R09).
@@ -266,7 +283,9 @@ def _reveal(request, store, draft, profile):
             continue  # sin unidad comprable y con talla conocida: no entra
         # Precio de la unidad REALMENTE seleccionada (variante); si la talla
         # está pendiente, el precio de referencia honesto es el base.
-        unit_price = chosen.price if chosen else product.base_price
+        unit_price = chosen.price if chosen else min(r["variant"].price for r in rows if r["variant"].stock > 0)
+        if budget is not None and unit_price > budget:
+            continue
         if total_budget is not None and total + unit_price > total_budget:
             excluded.append({"product": product.short_title, "reason": "OVER_BUDGET_TOTAL"})
             continue  # menos piezas, jamás inventar que el presupuesto alcanzó (R10)
@@ -287,9 +306,8 @@ def _reveal(request, store, draft, profile):
     alternatives = selection[1:] if len(selection) > 1 else []
     complements = []
     if main is not None:
-        remaining = (total_budget - main["unit_price"]) if total_budget is not None else None
         bundle, _ = compose_bundle(store, main["product"], measurement=measurement,
-                                   budget=remaining, max_extras=2)
+                                   budget=total_budget, max_extras=2)
         selected_ids = {e["product"].pk for e in selection}
         comp_total = main["unit_price"]
         for item in bundle:
@@ -299,7 +317,12 @@ def _reveal(request, store, draft, profile):
                 item["product"], measurement, needs_fit)
             if c_sold_out:
                 continue
-            c_price = c_variant.price if c_variant else item["product"].base_price
+            if c_variant is None and c_fit and c_fit["state"] not in ("sin_datos",):
+                continue
+            available = [r["variant"] for r in c_rows if r["variant"].stock > 0]
+            if not available:
+                continue
+            c_price = c_variant.price if c_variant else min(v.price for v in available)
             if total_budget is not None and comp_total + c_price > total_budget:
                 continue  # presupuesto acumulado también en complementos (R10)
             complements.append({
@@ -310,6 +333,22 @@ def _reveal(request, store, draft, profile):
             })
             comp_total += c_price
 
+    action_id = ""
+    if request is not None and main is not None:
+        # Quote the visible selectable units. A stale form cannot silently
+        # add another price, pet, or arbitrary catalog ID.
+        options = {}
+        for item in [main] + complements:
+            variants = [item["variant"]] if item["variant"] else item["selectable_variants"]
+            options.update({str(v.public_id): str(v.price) for v in variants})
+        token = ActionToken.objects.create(
+            action_id=uuid.uuid4().hex[:24], tool="looklab_add", store=store,
+            session_key=tenancy.owner_key(request),
+            payload={"options": options, "profile_id": profile.pk if profile else None,
+                     "budget": str(budget) if budget else None, "budget_scope": budget_scope},
+            expires_at=timezone.now() + timedelta(minutes=15),
+        )
+        action_id = token.action_id
     return {
         "selection": selection,          # compatibilidad con pruebas (matriz A)
         "main": main, "alternatives": alternatives, "complements": complements,
@@ -318,6 +357,7 @@ def _reveal(request, store, draft, profile):
         "budget": budget, "budget_scope": budget_scope,
         "measurement_origin": measurement_origin,
         "alias": profile.alias if profile else "",
+        "action_id": action_id,
     }
 
 
@@ -330,26 +370,46 @@ def looklab_add(request, store):
     """
     from . import services_commerce as commerce
 
-    variant_ids = request.POST.getlist("variant")
+    variant_ids = list(dict.fromkeys(v for v in request.POST.getlist("variant") if v))
     if not variant_ids:
         return redirect("reino_looklab", slug=store.slug)
-    cart = commerce.get_open_cart(store, request.session.session_key, create=True)
-    errors = []
-    profile_id = tenancy.active_profile_id(request, store)
-    recipient = services_memory.get_profile(store, request.session.session_key, profile_id) if profile_id else None
-    for vid in variant_ids:
-        variant = Variant.objects.filter(
-            public_id=vid, product__store=store, is_active=True, stock__gt=0
-        ).first()
-        if variant is None:
-            errors.append("Una pieza ya no está disponible.")
-            continue
-        try:
-            commerce.add_item(cart, variant, 1, recipient=recipient)
-        except (commerce.CartError, commerce.StockConflict) as exc:
-            errors.append(str(exc))
-    if errors:
-        request.session["reino_cart_error"] = " ".join(errors)
+    from . import services_visibility as visibility
+    try:
+        with transaction.atomic():
+            token = ActionToken.objects.select_for_update().filter(
+                action_id=request.POST.get("action_id", ""), store=store,
+                session_key=tenancy.owner_key(request), tool="looklab_add",
+            ).first()
+            if token and token.status == ActionToken.Status.EXECUTED:
+                return redirect("reino_cart", slug=store.slug)
+            if not token or token.status != ActionToken.Status.PROPOSED or token.expires_at <= timezone.now():
+                raise commerce.CartError("La selección venció. Volvé a LookLab para revisarla.")
+            if len(variant_ids) > 3 or set(variant_ids) - set(token.payload["options"]):
+                raise commerce.CartError("La selección no coincide con el look mostrado.")
+            profile_id = tenancy.active_profile_id(request, store)
+            recipient = services_memory.get_profile(store, tenancy.owner_key(request), profile_id) if profile_id else None
+            if (recipient.pk if recipient else None) != token.payload.get("profile_id"):
+                raise commerce.CartError("El destinatario cambió. Revisá el look nuevamente.")
+            variants = list(Variant.objects.select_for_update().filter(
+                public_id__in=variant_ids, product__in=visibility.visible_products(store=store),
+                is_active=True, stock__gt=0,
+            ))
+            if len(variants) != len(variant_ids):
+                raise commerce.CartError("Una pieza ya no está disponible.")
+            if any(str(v.price) != token.payload["options"][str(v.public_id)] for v in variants):
+                raise commerce.CartError("El precio cambió. Revisá el look antes de confirmar.")
+            budget = Decimal(token.payload["budget"]) if token.payload.get("budget") else None
+            if budget is not None and ((token.payload.get("budget_scope") == "total" and sum(v.price for v in variants) > budget)
+                                       or any(v.price > budget for v in variants)):
+                raise commerce.CartError("La selección supera tu presupuesto.")
+            cart = commerce.get_open_cart(store, tenancy.owner_key(request), create=True)
+            for variant in variants:
+                commerce.add_item(cart, variant, 1, recipient=recipient)
+            token.status = ActionToken.Status.EXECUTED
+            token.executed_at = timezone.now()
+            token.save(update_fields=["status", "executed_at"])
+    except (commerce.CartError, commerce.StockConflict, ValidationError, ValueError) as exc:
+        request.session["reino_cart_error"] = str(exc) if isinstance(exc, commerce.CartError) else "La selección ya no es válida. Revisá el look."
     return redirect("reino_cart", slug=store.slug)
 
 
@@ -362,14 +422,19 @@ def looklab_save(request, store):
     draft = tenancy.looklab_draft(request, store)
     profile = _draft_profile(request, store, draft)
     items = []
-    for vid in request.POST.getlist("variant"):
-        v = Variant.objects.filter(public_id=vid, product__store=store).first()
+    from . import services_visibility as visibility
+    for vid in list(dict.fromkeys(request.POST.getlist("variant")))[:3]:
+        try:
+            v = Variant.objects.filter(public_id=vid, is_active=True,
+                                       product__in=visibility.visible_products(store=store)).first()
+        except (ValidationError, ValueError):
+            continue
         if v:
             items.append({"variant_id": str(v.public_id), "title": v.product.short_title,
                           "option": v.option_label, "price": str(v.price)})
     if items:
         Look.objects.create(
-            store=store, session_key=request.session.session_key, profile=profile,
+            store=store, session_key=tenancy.owner_key(request), profile=profile,
             occasion=draft.get("occasion", ""), style=draft.get("style", ""),
             budget=Decimal(draft["budget"]) if draft.get("budget") else None,
             items=items,

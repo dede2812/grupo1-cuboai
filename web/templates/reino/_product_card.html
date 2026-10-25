@@ -1,20 +1,20 @@
 {% load static %}
-{# ProductCard: foto grande, tienda, nombre, precio (o «desde»), estado,
-   razón verificable, acciones Ver/Comparar/Guardar (P04/P05). #}
+{% comment %} ProductCard: foto grande, tienda, nombre, precio (o «desde»), estado,
+   razón verificable, acciones Ver/Comparar/Guardar (P04/P05). {% endcomment %}
 <article class="card">
-    <a class="card__media" href="{% url 'reino_product' reino_store.slug product.slug %}" tabindex="-1" aria-hidden="true">
+    <a class="card__media" href="{% url 'reino_product' product.store.slug product.slug %}" tabindex="-1" aria-hidden="true">
         {% with media=product.media.first %}
         {% if media %}<img src="{{ media.url }}" alt="{{ media.alt }}" loading="lazy">
         {% else %}<img src="{% static 'reino/img/placeholder.svg' %}" alt="">{% endif %}
         {% endwith %}
     </a>
     <div class="card__body">
-        <h3 class="card__title"><a href="{% url 'reino_product' reino_store.slug product.slug %}">{{ product.short_title }}</a></h3>
+        <h3 class="card__title"><a href="{% url 'reino_product' product.store.slug product.slug %}">{{ product.short_title }}</a></h3>
         {% if product.reason %}<p class="card__reason">{{ product.reason }}</p>{% endif %}
         <p class="card__price">${{ product.base_price }}</p>
         {% if fit %}<p class="mb-0"><span class="fit fit--{{ fit.state }}">{{ fit.label }}</span></p>{% endif %}
         <div class="card__footer">
-            <a class="btn btn--secondary btn--sm" href="{% url 'reino_product' reino_store.slug product.slug %}">Ver detalles</a>
+            <a class="btn btn--secondary btn--sm" href="{% url 'reino_product' product.store.slug product.slug %}">Ver detalles</a>
             {% with first_variant=product.first_active_variant %}
             {% if first_variant %}
             <form method="post" action="{% url 'reino_compare_add' %}" style="display:inline">

@@ -1,0 +1,10 @@
+.runtime/
+.artifacts/
+__pycache__/
+*.py[cod]
+.env
+.env.*
+!.env.example
+web/media/
+web/test_*.sqlite3
+*.log

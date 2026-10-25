@@ -11,7 +11,29 @@ Decisiones clave (ver docs/02_ARQUITECTURA_Y_DATOS.md):
 import uuid
 
 from django.db import models
+from django.conf import settings
 from django.utils import timezone
+
+
+class CustomerIdentity(models.Model):
+    """Opaque customer owner key, independent of browser session rotation."""
+
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+                               related_name="customer_identity")
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    @property
+    def owner_key(self):
+        return "customer:" + self.public_id.hex
+
+
+class AIUsageCounter(models.Model):
+    """Atomic fixed-window quotas; keys contain only hashed owner identifiers."""
+
+    key = models.CharField(max_length=160, unique=True)
+    count = models.PositiveIntegerField(default=0)
+    expires_at = models.DateTimeField(db_index=True)
 
 
 class Merchant(models.Model):
@@ -242,6 +264,7 @@ class Cart(models.Model):
     class Status(models.TextChoices):
         OPEN = "open", "Abierto"
         ORDERED = "ordered", "Convertido en pedido"
+        MERGED = "merged", "Integrado en cuenta"
 
     public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     store = models.ForeignKey(Store, on_delete=models.CASCADE, related_name="carts")
@@ -402,6 +425,7 @@ class OrderItem(models.Model):
     variant = models.ForeignKey(Variant, null=True, on_delete=models.SET_NULL, related_name="+")
     sku = models.CharField(max_length=60)
     title = models.CharField(max_length=160)
+    offer_type = models.CharField(max_length=12, choices=Product.OfferType.choices, default="physical")
     option_label = models.CharField(max_length=60, blank=True)
     recipient_alias = models.CharField(max_length=80, blank=True)
     quantity = models.PositiveSmallIntegerField(default=1)
@@ -918,6 +942,7 @@ class Booking(models.Model):
     slot = models.ForeignKey(ServiceSlot, on_delete=models.PROTECT, related_name="bookings")
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="bookings")
     buyer_email = models.EmailField()
+    quantity = models.PositiveSmallIntegerField(default=1)
     status = models.CharField(max_length=10, choices=Status.choices,
                               default=Status.CONFIRMED)
     created_at = models.DateTimeField(auto_now_add=True)

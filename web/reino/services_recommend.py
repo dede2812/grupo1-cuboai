@@ -13,7 +13,7 @@ Versión del motor: ENGINE_VERSION (se guarda en cada RecommendationEvent).
 """
 
 import uuid
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from . import services_ranking, services_visibility as visibility
 from .models import Product, RecommendationEvent, Variant
@@ -38,13 +38,22 @@ WEIGHTS = {"I": 0.35, "F": 0.22, "Q": 0.16, "D": 0.10, "P": 0.10, "V": 0.07}
 def normalize_intent(occasion="", style="", budget=None, budget_scope="products",
                      profile=None, needs_fit=True):
     """Paso A: separa necesidades obligatorias de preferencias."""
+    if budget not in (None, ""):
+        try:
+            budget = Decimal(str(budget))
+            if not budget.is_finite() or budget <= 0 or budget > Decimal("100000"):
+                raise ValueError("Presupuesto fuera de rango.")
+        except InvalidOperation:
+            raise ValueError("Presupuesto inválido.") from None
+    else:
+        budget = None
     return {
         "occasion": occasion or "",
         "style": style or "",
-        "budget": Decimal(str(budget)) if budget not in (None, "") else None,
+        "budget": budget,
         "budget_scope": budget_scope,
         "profile_id": str(profile.public_id) if profile else None,
-        "needs_fit": bool(needs_fit and profile),
+        "needs_fit": bool(needs_fit),
     }
 
 
@@ -63,15 +72,20 @@ def _hard_filter(product, intent, measurement):
     variants = [v for v in product.variants.filter(is_active=True) if v.stock > 0]
     if not variants:
         return False, "OUT_OF_STOCK"
-    if intent["budget"] is not None and intent["budget_scope"] == "products":
-        cheapest = min(v.price for v in variants)
-        if cheapest > intent["budget"]:
-            return False, "OVER_BUDGET"
     if intent["needs_fit"] and measurement is not None:
         # La talla incompatible excluye; lo desconocido NO excluye pero se separa.
         fit = evaluate_for_profile(product, measurement)
         if fit["state"] not in (COMPATIBLE, EDGE) and fit["state"] != "sin_datos":
             return False, "FIT_INCOMPATIBLE"
+        if fit["state"] in (COMPATIBLE, EDGE):
+            from .services_fit import label_matches
+            variants = [v for v in variants if any(label_matches(c, v.option_label) for c in fit["candidates"])]
+            if not variants:
+                return False, "FIT_OUT_OF_STOCK"
+    if intent["budget"] is not None:
+        cheapest = min(v.price for v in variants)
+        if cheapest > intent["budget"]:
+            return False, "OVER_BUDGET"
     return True, None
 
 
@@ -150,25 +164,33 @@ def recommend(store, intent, measurement=None, limit=3, kind="looklab"):
             excluded.append({"product": product.short_title, "reason": why})
             continue
         score, reasons = _score(product, intent, measurement, fit_cache)
+        available = list(product.variants.filter(is_active=True, stock__gt=0))
+        fit = fit_cache.get(product.pk)
+        if fit and fit["state"] in (COMPATIBLE, EDGE):
+            from .services_fit import label_matches
+            available = [v for v in available if any(label_matches(c, v.option_label) for c in fit["candidates"])]
+        variant = min(available, key=lambda v: (v.price, v.pk))
         if intent["budget"] is not None and score >= 0:
-            cheapest = min(v.price for v in product.variants.filter(is_active=True, stock__gt=0))
+            cheapest = variant.price
             if intent["budget_scope"] == "products" and cheapest <= intent["budget"]:
                 reasons.append(BUDGET_TOTAL_OK)
-        chosen.append({"product": product, "score": score, "reasons": reasons})
+        chosen.append({"product": product, "variant": variant, "price": variant.price,
+                       "fit": fit, "score": score, "reasons": reasons})
 
     # Orden final: política de ranking VERSIONADA (§6.4, ranking-v1). Los
     # candidatos ya son elegibles; aquí sólo se ordenan con desglose.
     ranked = services_ranking.score_candidates(
         [{"product": c["product"],
-          "variant": c["product"].variants.filter(is_active=True).first(),
-          "price": c["product"].base_price,
+          "variant": c["variant"],
+          "price": c["price"],
           "reasons": c["reasons"], "legacy_score": c["score"]} for c in chosen],
         intent={**intent, "preferences": intent.get("preferences") or {}})
-    for c, r in zip(chosen, ranked):
+    by_id = {c["product"].pk: c for c in chosen}
+    for r in ranked:
+        c = by_id[r["product"].pk]
         c["rank_score"] = str(r["score"])
         c["score_parts"] = r["score_parts"]
-    selection = [c for _, c in sorted(zip(ranked, chosen),
-                                      key=lambda p: -Decimal(p[0]["score"]))[:limit]]
+    selection = [by_id[r["product"].pk] for r in ranked[:limit]]
 
     RecommendationEvent.objects.create(
         store=store,
@@ -193,6 +215,11 @@ def compose_bundle(store, main_product, measurement=None, budget=None, max_extra
     nunca se inventa compatibilidad ni se duplica función. El presupuesto es
     acumulado: un extra que supera el total queda fuera.
     """
+    if main_product.store_id != store.pk:
+        return [], Decimal("0")
+    budget = Decimal(str(budget)) if budget is not None else None
+    if budget is not None and not budget.is_finite():
+        raise ValueError("Presupuesto inválido.")
     bundle, total = [], main_product.base_price
     main = {
         "product": main_product,
@@ -202,6 +229,7 @@ def compose_bundle(store, main_product, measurement=None, budget=None, max_extra
     bundle.append(main)
     main_occasions = set(main_product.occasions or [])
     main_styles = set(main_product.styles or [])
+    categories = {main_product.category}
 
     candidates = (
         visibility.visible_products(store=main_product.store)
@@ -211,6 +239,8 @@ def compose_bundle(store, main_product, measurement=None, budget=None, max_extra
     for product in candidates:
         if len(bundle) > max_extras:
             break
+        if product.category in categories:
+            continue
         shared = (set(product.occasions or []) & main_occasions) or (
             set(product.styles or []) & main_styles
         )
@@ -221,6 +251,7 @@ def compose_bundle(store, main_product, measurement=None, budget=None, max_extra
         if budget is not None and total + product.base_price > budget:
             continue  # presupuesto acumulado estricto
         bundle.append({"product": product, "role": "complemento", "price": product.base_price})
+        categories.add(product.category)
         total += product.base_price
     return bundle, total
 

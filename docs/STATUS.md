@@ -1,3 +1,5 @@
+> Estado histórico de rondas anteriores, conservado como evidencia del trabajo de Fluso. El estado autoritativo de esta fase es [15_ESTADO_FINAL_Y_TRAZABILIDAD.md](15_ESTADO_FINAL_Y_TRAZABILIDAD.md), con resultados en [12_PRUEBAS_Y_RESULTADOS.md](12_PRUEBAS_Y_RESULTADOS.md). Las cifras de 432/493 pruebas que siguen no son resultados nuevos.
+
 # STATUS · Wiener Kingdom / Reino Commerce
 
 Actualizado: 23-oct-2026 (segunda ronda: revisión independiente 2 cerrada).

@@ -24,7 +24,7 @@ urlpatterns = [
     path("order/<uuid:public_id>/", views.order_detail, name="order_detail"),
     path(
         "panel/login/",
-        auth_views.LoginView.as_view(template_name="tienda/panel_login.html"),
+        panel.PanelLoginView.as_view(template_name="tienda/panel_login.html"),
         name="panel_login",
     ),
     path("panel/logout/", auth_views.LogoutView.as_view(), name="panel_logout"),

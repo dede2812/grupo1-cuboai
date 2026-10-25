@@ -1,0 +1,16 @@
+{% extends "reino/base.html" %}
+{% block title %}Crear cuenta · Reino Commerce{% endblock %}
+{% block content %}
+<section class="section container" style="max-width:560px">
+    <p class="eyebrow">Royal Passport</p>
+    <h1>Una cuenta para tus próximos planes.</h1>
+    <p class="muted">Conservá tus perfiles y looks. Vos elegís qué recordar y podés borrar la memoria cuando quieras.</p>
+    <form class="step-card" method="post">
+        {% csrf_token %}<input type="hidden" name="next" value="{{ next }}">
+        {% include "reino/auth/_fields.html" %}
+        <button class="btn btn--primary" type="submit">Crear cuenta</button>
+    </form>
+    <p>¿Ya tenés cuenta? <a href="{% url 'reino_login' %}">Ingresar</a></p>
+    <p class="small muted">Crear una cuenta no autoriza mensajes publicitarios ni activa permisos de memoria.</p>
+</section>
+{% endblock %}

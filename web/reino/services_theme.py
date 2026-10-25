@@ -53,8 +53,8 @@ def default_config(identity="neutral"):
         ],
     }
     if identity == "wiener-kingdom":
-        base["colors"].update({"primary": "#FF4D9D", "on_primary": "#15172E", "accent": "#FFB548",
-                               "bg": "#FFF8ED", "ink": "#15172E", "soft": "#FFE9F2"})
+        base["colors"].update({"primary": "#AF3635", "on_primary": "#FFFFFF", "accent": "#C5CBD5",
+                               "bg": "#FAF8F6", "ink": "#101E36", "soft": "#F0EBE8"})
         base["font_pair"] = "manrope-fraunces"
     elif identity == "estudio-nube":
         base["colors"].update({"primary": "#B9A5FF", "on_primary": "#23234A", "accent": "#FBE58A",
@@ -91,7 +91,8 @@ def validate_config(config):
     colors = config.get("colors") or {}
     for key in ("ink", "bg", "surface", "primary", "accent", "on_primary"):
         value = colors.get(key, "")
-        if not isinstance(value, str) or not value.startswith("#") or len(value) != 7:
+        import re
+        if not isinstance(value, str) or not re.fullmatch(r"#[0-9A-Fa-f]{6}", value):
             errors.append(f"Color «{key}» inválido: usá formato #RRGGBB.")
     if errors:
         return errors

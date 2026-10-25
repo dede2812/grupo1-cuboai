@@ -15,6 +15,8 @@ from decimal import Decimal, InvalidOperation
 
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.models import User
+from django.core.paginator import Paginator
+from django.db import transaction
 from django.shortcuts import redirect, render
 from django.views.decorators.http import require_POST
 
@@ -68,6 +70,14 @@ def _flash(request, text):
     request.session["reino_flash"] = text
 
 
+def _catalog_redirect(request, store):
+    from django.utils.http import url_has_allowed_host_and_scheme
+    target = request.POST.get("next", "")
+    if not target.startswith(f"/negocio/{store.slug}/") or not url_has_allowed_host_and_scheme(target, allowed_hosts={request.get_host()}):
+        target = f"/negocio/{store.slug}/catalogo/"
+    return redirect(target)
+
+
 # ------------------------------------------------------------------- M03 ----
 
 @merchant_view
@@ -75,21 +85,21 @@ def dashboard(request, store):
     """M03 · Resumen: «Esto necesita tu atención» primero, KPIs después."""
     orders = Order.objects.filter(store=store).order_by("-created_at")
     attention = orders.filter(payment_status=Order.PaymentStatus.PENDING)[:5]
-    low_stock = [v for p in Product.objects.filter(store=store, status="published")
-                 for v in p.variants.filter(is_active=True, stock__lte=2)][:5]
-
-    paid = orders.filter(payment_status=Order.PaymentStatus.PAID)
+    low_stock = Variant.objects.filter(product__store=store,
+        product__status="published", is_active=True, stock__lte=2).select_related("product")[:5]
+    from .services_business import financial_summary
+    summary = financial_summary(orders.filter(currency=store.currency))
     kpis = None
-    if paid.exists():
-        total = sum(o.total for o in paid)
+    if summary["paid_orders"] and member_can(request.reino_member, "payments"):
         kpis = {
-            "ventas": total, "pedidos_pagados": paid.count(),
-            "ticket_medio": total / paid.count(),
-            "pendientes": orders.filter(payment_status=Order.PaymentStatus.PENDING).count(),
+            "ventas": summary["net_receipts"], "pedidos_pagados": summary["paid_orders"],
+            "ticket_medio": summary["average_order"],
+            "pendientes": summary["pending_orders"],
         }
     return render(request, "reino/merchant_dashboard.html", {
         "store": store, "attention": attention, "low_stock": low_stock,
         "kpis": kpis,  # None => «Sin datos suficientes», nunca 0 % inventado
+        "other_currency_orders": orders.exclude(currency=store.currency).count(),
         "member": request.reino_member,
     })
 
@@ -101,8 +111,9 @@ def catalog(request, store):
     """M04 · Lista con imagen, SKU, variantes, precio y disponibilidad."""
     products = (Product.objects.filter(store=store)
                 .prefetch_related("media", "variants").order_by("short_title"))
+    page = Paginator(products, 24).get_page(request.GET.get("page"))
     return render(request, "reino/merchant_catalog.html", {
-        "store": store, "products": products,
+        "store": store, "products": page, "page": page,
         "can_catalog": member_can(request.reino_member, "catalog"),
         "can_inventory": member_can(request.reino_member, "inventory"),
     })
@@ -127,6 +138,10 @@ def _product_form(request, store, product=None):
         errors["title"] = "El título es obligatorio."
     if not data["short_title"]:
         data["short_title"] = data["title"][:80]
+    for field in PRODUCT_FIELDS:
+        limit = Product._meta.get_field(field).max_length
+        if limit and len(data[field]) > limit:
+            errors[field] = f"El campo {field} admite hasta {limit} caracteres."
     try:
         price = Decimal(data["base_price"] or "0")
         if price <= 0 or price > Decimal("999999"):
@@ -191,7 +206,9 @@ def product_edit(request, store, pk):
             _flash(request, "Cambios guardados.")
             return redirect("reino_merchant_product_edit", slug=store.slug, pk=product.pk)
     return render(request, "reino/merchant_product_form.html", {
-        "store": store, "product": product, "data": data, "errors": errors,
+        "store": store, "product": product, "data": data if data is not None else {
+            field: getattr(product, field) for field in (*PRODUCT_FIELDS, "occasions", "styles", "materials", "care", "is_featured", "bitcoin_discount_eligible", "status")
+        }, "errors": errors,
         "variants": product.variants.order_by("pk"),
         "fit_rules": product.fit_rules.order_by("-version")[:3],
         # F11: filas del editor (prellenadas desde la regla activa o desde el
@@ -219,7 +236,9 @@ def variant_new(request, store, pk):
     sku = request.POST.get("sku", "").strip()[:60]
     label = request.POST.get("option_label", "").strip()[:60]
     try:
-        stock = max(0, int(request.POST.get("stock", 0)))
+        stock = int(request.POST.get("stock", 0))
+        if not 0 <= stock <= 2147483647:
+            raise ValueError
     except ValueError:
         stock = 0
     override = request.POST.get("price_override", "").strip()
@@ -232,7 +251,7 @@ def variant_new(request, store, pk):
     if override:
         try:
             price_override = Decimal(override)
-            if price_override <= 0:
+            if not price_override.is_finite() or price_override <= 0 or price_override > Decimal("99999999.99"):
                 raise InvalidOperation
         except InvalidOperation:
             errors.append("Precio de variante no válido.")
@@ -248,9 +267,10 @@ def variant_new(request, store, pk):
 @merchant_view
 @require_capability("inventory")
 @require_POST
+@transaction.atomic
 def variant_stock(request, store, pk):
     """Ajuste de stock con MOTIVO obligatorio y registro auditable."""
-    variant = Variant.objects.filter(pk=pk, product__store=store).first()
+    variant = Variant.objects.select_for_update().filter(pk=pk, product__store=store).first()
     if variant is None:
         return redirect("reino_merchant_catalog", slug=store.slug)
     reason = request.POST.get("reason", "").strip()
@@ -260,7 +280,7 @@ def variant_stock(request, store, pk):
         delta = 0
     if not reason:
         _flash(request, "El ajuste de stock requiere un motivo.")
-    elif delta == 0 or variant.stock + delta < 0:
+    elif delta == 0 or not 0 <= variant.stock + delta <= 2147483647:
         _flash(request, "Ajuste no válido: el stock nunca queda negativo.")
     else:
         variant.stock += delta
@@ -268,8 +288,7 @@ def variant_stock(request, store, pk):
         StockAdjustment.objects.create(variant=variant, delta=delta, reason=reason[:200],
                                        by=request.user)
         _flash(request, f"Stock de {variant.sku}: {variant.stock} (motivo registrado).")
-    return redirect(request.POST.get("next") or
-                    f"/negocio/{store.slug}/catalogo/")
+    return _catalog_redirect(request, store)
 
 
 @merchant_view
@@ -281,7 +300,7 @@ def variant_toggle(request, store, pk):
         variant.is_active = not variant.is_active
         variant.save(update_fields=["is_active"])
         _flash(request, f"{variant.sku}: {'activa' if variant.is_active else 'desactivada'}.")
-    return redirect(request.POST.get("next") or f"/negocio/{store.slug}/catalogo/")
+    return _catalog_redirect(request, store)
 
 
 # ------------------------------------------------------------------- M05 ----
@@ -293,8 +312,9 @@ def orders(request, store):
     qs = Order.objects.filter(store=store).order_by("-created_at")
     if state:
         qs = qs.filter(status=state)
+    page = Paginator(qs, 30).get_page(request.GET.get("page"))
     return render(request, "reino/merchant_orders.html", {
-        "store": store, "orders": qs, "selected": state,
+        "store": store, "orders": page, "page": page, "selected": state,
         "states": Order.Status.choices, "member": request.reino_member,
     })
 
@@ -308,8 +328,16 @@ def order_detail(request, store, public_id):
                       {"store": store, "orders": [], "states": Order.Status.choices,
                        "selected": ""}, status=404)
     member = request.reino_member
+    transition_options = {}
+    for field, state_map in services_commerce.TRANSITIONS.items():
+        labels = dict(Order._meta.get_field(field).choices)
+        allowed = list(state_map.get(getattr(order, field), []))
+        if field == "payment_status" and order.payment_status == "partially_refunded":
+            allowed.append("partially_refunded")
+        transition_options[field] = [{"value": str(value), "label": str(labels[value])} for value in allowed]
     return render(request, "reino/merchant_order.html", {
         "store": store, "order": order,
+        "transition_options": transition_options,
         "transitions": {f: [str(v) for v in vs]
                         for f, vs in services_commerce.TRANSITIONS.items()},
         "current": {"status": order.status, "payment_status": order.payment_status,
@@ -344,19 +372,25 @@ def order_transition(request, store, public_id):
 # ------------------------------------------------------- M06–M08 mínimos ---
 
 @merchant_view
+@require_capability("orders")
 def customers(request, store):
     """M06 mínimo: clientes derivados de pedidos reales (sin inventar datos)."""
     seen = {}
-    for o in Order.objects.filter(store=store).order_by("-created_at"):
-        row = seen.setdefault(o.customer_email, {
+    orders = Order.objects.filter(store=store).order_by("-created_at")
+    for o in orders:
+        row = seen.setdefault(o.customer_email.casefold(), {
             "name": o.customer_name, "email": o.customer_email, "orders": 0,
             "paid_total": Decimal("0"), "last": o.created_at,
         })
         row["orders"] += 1
-        if o.payment_status == Order.PaymentStatus.PAID:
-            row["paid_total"] += o.total
+        if o.currency == store.currency and o.payment_status in ("paid", "partially_refunded", "refunded"):
+            if o.payment_status in ("partially_refunded", "refunded") and o.refund_amount is None:
+                row["paid_total"] = None
+            elif row["paid_total"] is not None:
+                row["paid_total"] += o.total - (o.refund_amount or Decimal("0"))
     return render(request, "reino/merchant_customers.html", {
         "store": store, "customers": sorted(seen.values(), key=lambda c: -c["orders"]),
+        "other_currency_orders": orders.exclude(currency=store.currency).count(),
     })
 
 
@@ -365,16 +399,17 @@ def customers(request, store):
 def finance(request, store):
     """M07 mínimo: conciliación de cobros manuales (evidencia, no etiquetas)."""
     qs = Order.objects.filter(store=store).order_by("-created_at")
-    paid = qs.filter(payment_status=Order.PaymentStatus.PAID)
     refunds = qs.filter(payment_status__in=(Order.PaymentStatus.REFUNDED,
                                             Order.PaymentStatus.PARTIALLY_REFUNDED))
     kpis = None
-    if paid.exists():
-        total = sum(o.total for o in paid)
-        kpis = {"cobrado": total, "pedidos": paid.count(),
-                "ticket_medio": total / paid.count()}
+    from .services_business import financial_summary
+    summary = financial_summary(qs.filter(currency=store.currency))
+    if summary["paid_orders"]:
+        kpis = {"cobrado": summary["net_receipts"], "pedidos": summary["paid_orders"],
+                "ticket_medio": summary["average_order"]}
     return render(request, "reino/merchant_finance.html", {
         "store": store, "kpis": kpis,
+        "other_currency_orders": qs.exclude(currency=store.currency).count(),
         "pending": qs.filter(payment_status=Order.PaymentStatus.PENDING),
         "refunds": refunds,
     })

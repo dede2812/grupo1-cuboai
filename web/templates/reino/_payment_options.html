@@ -1,0 +1,27 @@
+{% if active_payment or payment_options %}
+<div class="looklab-card" aria-labelledby="payment-options-title">
+  <h2 id="payment-options-title">Pagar este pedido</h2>
+  {% if active_payment %}
+    <p>{{ active_payment.get_state_display }}{% if active_payment.environment == "test" %} · Entorno de pruebas, sin cobro real{% endif %}</p>
+    {% if active_payment.redirect_url and active_payment.state == "requires_action" %}
+    <form method="post" action="{% url 'reino_payment_start' order.store.slug order.public_id active_payment.provider %}">
+      {% csrf_token %}<input type="hidden" name="order_token" value="{{ order.access_token }}">
+      <button class="btn btn--primary" type="submit">Continuar con el proveedor</button>
+    </form>
+    {% endif %}
+    <form method="post" action="{% url 'reino_payment_refresh' order.store.slug order.public_id active_payment.public_id %}">
+      {% csrf_token %}<input type="hidden" name="order_token" value="{{ order.access_token }}">
+      {% if active_payment.provider == "paypal" %}<input type="hidden" name="action" value="capture">{% endif %}
+      <button class="btn btn--secondary" type="submit">{% if active_payment.provider == "paypal" %}Confirmar pago autorizado{% else %}Comprobar pago{% endif %}</button>
+    </form>
+  {% else %}
+    <p>Importe a confirmar: <strong>{{ order.currency }} {{ order.total }}</strong>. El estado se confirma con el proveedor.</p>
+    {% for method in payment_options %}
+    <form method="post" action="{% url 'reino_payment_start' order.store.slug order.public_id method.provider %}">
+      {% csrf_token %}<input type="hidden" name="order_token" value="{{ order.access_token }}">
+      <button class="btn btn--primary" type="submit">{{ method.label }}{% if method.test %} · Prueba{% endif %}</button>
+    </form>
+    {% endfor %}
+  {% endif %}
+</div>
+{% endif %}

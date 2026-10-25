@@ -5,6 +5,35 @@
 <section class="section container" style="max-width:980px">
     <p class="eyebrow">Royal Passport</p>
     <h1>Mis perfiles y mi privacidad</h1>
+    {% if request.user.is_authenticated %}
+    <div class="step-card" style="margin:20px 0">
+        <p>Ingresaste como <strong>{{ request.user.username }}</strong>{% if request.user.email %} · {{ request.user.email }}{% endif %}.</p>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center">
+            <a class="btn btn--secondary btn--sm" href="{% url 'reino_password_change' %}">Cambiar contraseña</a>
+            <form method="post" action="{% url 'reino_logout' %}">{% csrf_token %}<button class="btn btn--ghost btn--sm" type="submit">Cerrar sesión</button></form>
+        </div>
+    </div>
+    {% else %}
+    <div class="step-card" style="margin:20px 0">
+        <h2>Esta visita es tuya.</h2>
+        <p class="muted">Ingresá o creá una cuenta para conservar tus perfiles, carrito y looks entre dispositivos. Podés continuar como invitado.</p>
+        <a class="btn btn--primary" href="{% url 'reino_login' %}">Ingresar</a>
+        <a class="btn btn--secondary" href="{% url 'reino_register' %}">Crear cuenta</a>
+    </div>
+    {% endif %}
+
+    {% if orders %}
+    <h2>Mis pedidos</h2>
+    <div class="steps-3" style="margin:20px 0">
+        {% for order in orders %}
+        <a class="step-card" href="{% url 'reino_order' order.store.slug order.public_id %}">
+            <strong>{{ order.reference }} · {{ order.store.name }}</strong>
+            <p>{{ order.get_status_display }} · ${{ order.total }} {{ order.currency }}</p>
+            <span class="small muted">{{ order.created_at|date:"d/m/Y" }}</span>
+        </a>
+        {% endfor %}
+    </div>
+    {% endif %}
 
     {% if stores|length > 1 %}
     <div class="pill-row">
@@ -31,6 +60,19 @@
                 pecho {{ m.chest_cm|default:"—" }} · cuello {{ m.neck_cm|default:"—" }} · largo {{ m.back_cm|default:"—" }} cm
                 {% else %}Sin medidas guardadas{% endif %}
             </p>
+            {% endwith %}
+            {% with preferences=saved_preferences|lookup:profile.public_id %}
+            <details style="margin-top:10px">
+                <summary>Mis preferencias</summary>
+                <form method="post" action="{% url 'reino_profile_preferences' profile.public_id %}" style="margin-top:12px">
+                    {% csrf_token %}<input type="hidden" name="store" value="{{ active_store.slug }}">
+                    <div class="field"><label for="style{{ profile.pk }}">Estilos o preferencias</label><input id="style{{ profile.pk }}" name="style" maxlength="120" value="{{ preferences.style|default:'' }}"></div>
+                    <div class="field"><label for="budget{{ profile.pk }}">Presupuesto habitual (USD)</label><input id="budget{{ profile.pk }}" name="budget" inputmode="decimal" value="{{ preferences.budget_hint|default:'' }}"></div>
+                    <label style="display:flex;gap:8px;align-items:flex-start"><input type="checkbox" name="remember" value="1" required> Autorizo guardar estas preferencias para personalizar recomendaciones.</label>
+                    <p class="small muted">Podés corregirlas, retirar el permiso o borrar la memoria. El presupuesto de cada compra lo confirmás vos.</p>
+                    <button class="btn btn--secondary btn--sm" type="submit">Guardar preferencias</button>
+                </form>
+            </details>
             {% endwith %}
             <details style="margin-top:10px">
                 <summary class="small" style="cursor:pointer;font-weight:700">Actualizar medidas</summary>

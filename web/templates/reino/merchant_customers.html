@@ -3,15 +3,16 @@
 {% block panel %}
 <h1 class="mt-0">Clientes</h1>
 <p class="muted small">Derivados de pedidos reales de esta tienda. Sin datos suficientes se dice, no se inventa.</p>
+<p class="muted small">Importes en {{ store.currency }}, con envío incluido. {% if other_currency_orders %}{{ other_currency_orders }} pedido(s) en otra moneda excluidos de los importes; no se aplica una conversión estimada.{% endif %}</p>
 {% if customers %}
 <div class="table-wrap">
 <table class="data">
-    <thead><tr><th>Cliente</th><th>Correo</th><th>Pedidos</th><th>Total pagado</th><th>Último pedido</th></tr></thead>
+    <thead><tr><th>Cliente</th><th>Correo</th><th>Pedidos</th><th>Cobros menos reembolsos</th><th>Último pedido</th></tr></thead>
     <tbody>
         {% for c in customers %}
         <tr>
             <td><strong>{{ c.name }}</strong></td><td>{{ c.email }}</td>
-            <td>{{ c.orders }}</td><td>${{ c.paid_total }}</td>
+            <td>{{ c.orders }}</td><td>{% if c.paid_total is not None %}${{ c.paid_total|floatformat:2 }}{% else %}Sin datos suficientes{% endif %}</td>
             <td class="small">{{ c.last|date:"d/m/Y H:i" }}</td>
         </tr>
         {% endfor %}

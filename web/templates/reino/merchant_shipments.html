@@ -1,0 +1,40 @@
+{% extends "reino/merchant_base.html" %}
+{% block title %}Despachos · {{ order.reference }}{% endblock %}
+{% block panel %}
+<p class="eyebrow"><a href="{% url 'reino_merchant_order' store.slug order.public_id %}">← Pedido {{ order.reference }}</a></p>
+<h1>Despachos y seguimiento</h1>
+<p class="muted">{{ order.customer_name }} · {% if order.delivery_mode == 'pickup' %}Retiro coordinado{% else %}Entrega local · {{ order.address }}, {{ order.city }}{% endif %}</p>
+{% if can_create %}
+<section class="looklab-card section--tight">
+    <h2>Preparar un despacho</h2>
+    <p class="help">Elegí las unidades de este paquete. Las cantidades restantes se pueden despachar después. El retiro y la entrega se coordinan manualmente.</p>
+    <form method="post" action="{% url 'reino_merchant_shipment_create' store.slug order.public_id %}">
+        {% csrf_token %}<input type="hidden" name="action_token" value="{{ action_token }}">
+        {% for line in lines %}<div class="field">
+            <label for="quantity_{{ line.item.pk }}">{{ line.item.title }} · {{ line.item.option_label }} ({{ line.pending }} pendientes)</label>
+            <input id="quantity_{{ line.item.pk }}" name="quantity_{{ line.item.pk }}" type="number" min="0" max="{{ line.pending }}" value="0" inputmode="numeric">
+        </div>{% endfor %}
+        <button class="btn btn--primary" type="submit">Registrar despacho manual</button>
+    </form>
+</section>
+{% else %}<p class="empty-note">No hay unidades físicas pendientes que se puedan despachar.</p>{% endif %}
+<h2>Despachos registrados</h2>
+{% for shipment in shipments %}
+<section class="looklab-card section--tight">
+    <h3>Despacho {{ shipment.pk }} · {{ shipment.get_status_display }}</h3>
+    <p class="small muted">{{ shipment.created_at|date:"d/m/Y H:i" }} · {% if shipment.service == 'pickup' %}Retiro{% else %}Entrega local{% endif %}{% if shipment.tracking %} · Referencia: {{ shipment.tracking }}{% endif %}</p>
+    <ul>{% for line in shipment.lines %}{% for item in order.items.all %}{% if item.pk == line.order_item_id %}<li>{{ item.title }} · {{ item.option_label }} × {{ line.quantity }}</li>{% endif %}{% endfor %}{% endfor %}</ul>
+    {% if shipment.provider == 'manual' and shipment.status != 'cancelled' and shipment.status != 'returned' %}
+    <form method="post" action="{% url 'reino_merchant_shipment_update' store.slug order.public_id shipment.public_id %}">
+        {% csrf_token %}
+        <div class="field"><label for="state-{{ shipment.pk }}">Nuevo estado</label><select name="status" id="state-{{ shipment.pk }}">{% for value, label in states %}<option value="{{ value }}" {% if value == shipment.status %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
+        <div class="field"><label for="tracking-{{ shipment.pk }}">Referencia de seguimiento (opcional)</label><input id="tracking-{{ shipment.pk }}" name="tracking" maxlength="120" value="{{ shipment.tracking }}"></div>
+        <div class="field"><label for="note-{{ shipment.pk }}">Evidencia o motivo</label><input id="note-{{ shipment.pk }}" name="note" maxlength="200" required></div>
+        <button class="btn btn--secondary" type="submit">Guardar seguimiento</button>
+    </form>
+    {% endif %}
+    <details><summary>Historial del despacho</summary><ul class="small">{% for event in shipment.events.all %}{% if event.code != 'create-request' %}<li>{{ event.occurred_at|date:"d/m/Y H:i" }} · {{ event.code }}{% if event.detail %}: {{ event.detail }}{% endif %}</li>{% endif %}{% endfor %}</ul></details>
+</section>
+{% empty %}<p class="empty-note">Todavía no hay despachos registrados.</p>{% endfor %}
+<p class="help">El estado de cada despacho se registra por separado del pedido. Una incidencia o devolución no repone inventario automáticamente: el equipo debe comprobar la recepción y registrar el ajuste correspondiente.</p>
+{% endblock %}

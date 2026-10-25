@@ -8,7 +8,7 @@
 
     <div class="grid grid--2" style="margin-top:28px;align-items:start">
         <div>
-            <div class="module-navy" aria-hidden="true">
+            <div class="fit-diagram">
                 <svg viewBox="0 0 320 160" role="img" aria-label="Diagrama: pecho detrás de las patas, cuello donde asienta el collar, espalda de base a base" style="width:100%;height:auto">
                     <rect x="40" y="60" width="180" height="60" rx="30" fill="#EDF1F8"/>
                     <circle cx="230" cy="62" r="34" fill="#EDF1F8"/>
@@ -42,10 +42,17 @@
             <form method="post">
                 {% csrf_token %}
                 <div class="field">
+                    <label for="fit-product">Prenda a evaluar</label>
+                    <select id="fit-product" name="producto">
+                        <option value="">Todas las prendas con guía publicada</option>
+                        {% for p in products %}<option value="{{ p.slug }}" {% if selected_product == p.slug %}selected{% endif %}>{{ p.short_title }}</option>{% endfor %}
+                    </select>
+                </div>
+                <div class="field">
                     <label>Unidad</label>
                     <div class="pill-row">
-                        <label class="pill"><input type="radio" name="unit" value="cm" checked> cm</label>
-                        <label class="pill"><input type="radio" name="unit" value="in"> pulgadas</label>
+                        <label class="pill"><input type="radio" name="unit" value="cm" {% if values.unit == "cm" %}checked{% endif %}> cm</label>
+                        <label class="pill"><input type="radio" name="unit" value="in" {% if values.unit == "in" %}checked{% endif %}> pulgadas</label>
                     </div>
                 </div>
                 <div class="field--inline">
@@ -68,32 +75,24 @@
         </div>
     </div>
 
-    {% if result %}
+    {% if evaluated %}
     <div class="section--tight">
+        <h2>Resultado de tus medidas</h2>
+        <p class="small muted">La compatibilidad depende de la guía de cada prenda. Las existencias se vuelven a verificar al comprar.</p>
+        {% for item in results %}
         <div class="looklab-card" role="status">
-            <h2 class="mt-0" style="font-size:1.4rem">
-                <span class="fit fit--{{ result.state }}">{{ result.label }}</span>
-            </h2>
-            <p>{{ result.explanation }}</p>
-            {% if result.candidates %}
-            <p class="mb-0">Talla{{ result.candidates|pluralize }} sugerida{{ result.candidates|pluralize }}:
-            <strong>{{ result.candidates|join:", " }}</strong> (regla v{{ result.rule_version }}).</p>
+            <h3 class="mt-0">{{ item.product.short_title }}</h3>
+            <p><span class="fit fit--{{ item.fit.state }}">{{ item.fit.label }}</span></p>
+            <p>{{ item.fit.explanation }}</p>
+            {% if item.fit.candidates %}
+            <p>Talla{{ item.fit.candidates|pluralize }} sugerida{{ item.fit.candidates|pluralize }}:
+            <strong>{{ item.fit.candidates|join:", " }}</strong> (regla v{{ item.fit.rule_version }}).</p>
+            {% if item.available_sizes %}<p class="small">Con existencias ahora: {{ item.available_sizes|join:", " }}.</p>
+            {% else %}<p class="small">Las tallas sugeridas no tienen existencias disponibles ahora.</p>{% endif %}
             {% endif %}
-            {% if product %}
-            <p style="margin-top:14px"><a class="btn btn--secondary btn--sm" href="{% url 'reino_product' reino_store.slug product.slug %}">Usar estas medidas en {{ product.short_title }}</a></p>
-            {% endif %}
+            <p style="margin-top:14px"><a class="btn btn--secondary btn--sm" href="{% url 'reino_product' reino_store.slug item.product.slug %}">Ver {{ item.product.short_title }} y elegir talla</a></p>
         </div>
-    </div>
-    {% endif %}
-
-    {% if profile %}
-    <div class="section--tight">
-        <h2>Evaluar contra una prenda</h2>
-        <div class="pill-row">
-            {% for p in products %}
-            <a class="pill" href="?producto={{ p.slug }}">{{ p.short_title }}</a>
-            {% endfor %}
-        </div>
+        {% empty %}<p class="empty-state">Esta tienda todavía no tiene prendas con una guía publicada para evaluar.</p>{% endfor %}
     </div>
     {% endif %}
 </section>

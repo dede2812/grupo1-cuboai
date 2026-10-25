@@ -193,8 +193,9 @@ def components_showcase(request):
     """Galería viva del sistema visual Reino (G5): todos los componentes con
     datos reales de demostración — referencia de implementación y revisión."""
     from .models import Product, Store
-    store = Store.objects.filter(status="active").first()
-    products = Product.objects.filter(status="published").select_related(
+    from .services_visibility import visible_products, visible_stores
+    store = visible_stores().first()
+    products = visible_products().select_related(
         "store").prefetch_related("media", "variants")[:3]
     return render(request, "reino/plataforma_componentes.html", {
         "store": store, "products": products,

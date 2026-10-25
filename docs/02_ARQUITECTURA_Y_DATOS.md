@@ -1,3 +1,5 @@
+> Nota de versión: el cuerpo siguiente conserva la arquitectura de la fase original. Las ampliaciones actuales se detallan al final y en [Cambios finales](16_CAMBIOS_VERSION_FINAL.md); los conteos de tests y pendientes antiguos son históricos.
+
 # 02 · Arquitectura y datos (F2)
 
 ## Arquitectura elegida
@@ -83,3 +85,33 @@ No se recreó ningún producto, pedido o identificador existente.
 - `transaction_mode=IMMEDIATE, timeout=20` (config heredada) evita falsos "database is locked".
 - Doble clic/reintento: clave idempotente en sesión + constraint único → mismo pedido.
 - Webhooks de pago: no aplica P0 (sin pasarela); el diseño de estados/outbox queda listo (F8).
+
+
+## Ampliaciones de la fase final sobre `2ca48413`
+
+- `services_business` separa el cálculo de cohortes de las vistas HTTP y del SVG.
+  Usa `Order`, `OrderItem` y `AnalyticsEvent` existentes; no replica un almacén de
+  métricas ni introduce otro framework. Los reportes tienen autorización y filtros
+  de tenant antes de consultar o exportar.
+- `CustomerIdentity` relaciona un usuario Django con un UUID opaco. La clave de
+  propietario de cuenta es estable entre sesiones; los invitados conservan su
+  sesión. `services_identity` centraliza la incorporación consentida de datos.
+- `AIUsageCounter` aplica cuotas persistentes con incremento atómico. Separa los
+  límites de uso de la conversación; la limpieza controla expiraciones.
+- `OrderItem.offer_type` conserva el tipo de oferta del pedido para que los
+  cambios posteriores de catálogo no conviertan un digital en envío físico.
+- `Booking.quantity` conserva las unidades reservadas por pedido y horario.
+  Reservar y liberar capacidad usa esa cantidad, no una unidad por registro.
+- Los adaptadores concretos viven en `payments/` y `shipping/`; verificación
+  financiera y cumplimiento permanecen en servicios. Webhooks sí forman parte
+  del código actual; la nota P0 anterior describe la fase original.
+- `Order.refund_amount` representa el reembolso acumulado. La analítica no suma
+  nuevamente los importes de los intentos y no inventa distribución fiscal.
+- CI ejecuta ambos conjuntos de aplicaciones en PostgreSQL. La integridad del
+  esquema se verifica con `makemigrations --check --dry-run` y migración real.
+
+No se añade RLS, infraestructura vectorial, frontend separado ni microservicios.
+Las migraciones aditivas y correctivas conservan las tablas históricas; revisar
+sus archivos concretos y el resultado de tests antes de aplicarlas en un entorno
+con datos reales. `seed_demo` normal es no destructivo; el borrado pertenece a
+`--reset`, no al comando normal descrito en la primera fase.

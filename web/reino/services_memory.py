@@ -6,6 +6,8 @@ Reglas (S10/§12):
 - Dos perros no comparten datos por coincidencia de nombre: selección por ID.
 """
 
+from django.core.exceptions import ValidationError
+from django.db.models import Q
 from django.utils import timezone
 
 from .models import Consent, Measurement, MemorySummary, Preference, RecipientProfile
@@ -13,9 +15,12 @@ from .models import Consent, Measurement, MemorySummary, Preference, RecipientPr
 
 def get_profile(store, session_key, public_id):
     """Perfil por ID validado contra tienda y propietario (fail-closed)."""
-    return RecipientProfile.objects.filter(
-        store=store, session_key=session_key, public_id=public_id
-    ).first()
+    try:
+        return RecipientProfile.objects.filter(
+            store=store, session_key=session_key, public_id=public_id
+        ).first()
+    except (ValidationError, ValueError, TypeError):
+        return None
 
 
 def list_profiles(store, session_key):
@@ -59,12 +64,15 @@ def save_measurement(profile, chest_cm=None, neck_cm=None, back_cm=None, origina
 
 
 def has_consent(store, session_key, purpose, profile=None):
-    qs = Consent.objects.filter(
-        store=store, session_key=session_key, purpose=purpose, status=Consent.Status.GRANTED
-    )
+    if profile is not None and (profile.store_id != store.pk or profile.session_key != session_key):
+        return False
+    qs = Consent.objects.filter(store=store, session_key=session_key, purpose=purpose)
     if profile is not None:
-        qs = qs.filter(profile__in=(profile, None))
-    return qs.exists()
+        specific = qs.filter(profile=profile).order_by("-granted_at", "-pk").first()
+        if specific:
+            return specific.status == Consent.Status.GRANTED
+    permission = qs.filter(profile__isnull=True).order_by("-granted_at", "-pk").first()
+    return permission is not None and permission.status == Consent.Status.GRANTED
 
 
 def grant_consent(store, session_key, purpose, profile=None, version="v1"):
@@ -85,6 +93,9 @@ def revoke_consent(store, session_key, purpose, profile=None):
     un borrado selectivo por expresión regular: se excluye el historial
     afectado completo.
     """
+    if profile is not None and (profile.store_id != store.pk or profile.session_key != session_key):
+        return 0
+    previously_authorized = has_consent(store, session_key, purpose, profile)
     qs = Consent.objects.filter(
         store=store, session_key=session_key, purpose=purpose, status=Consent.Status.GRANTED
     )
@@ -98,6 +109,11 @@ def revoke_consent(store, session_key, purpose, profile=None):
         # Los derivados de ese permiso dejan de existir.
         Preference.objects.filter(consent=consent).delete()
         n += 1
+    if profile is not None and previously_authorized and not n:
+        Consent.objects.update_or_create(store=store, session_key=session_key, purpose=purpose, profile=profile,
+                                         defaults={"status": Consent.Status.REVOKED, "revoked_at": timezone.now()})
+        profile.preferences.filter(consent__purpose=purpose).delete()
+        n = 1
     if n:
         # Sellar el historial de ESTA conversación (tienda+sesión): los datos
         # revocados no se reenvían al modelo en ningún turno futuro.
@@ -109,6 +125,10 @@ def revoke_consent(store, session_key, purpose, profile=None):
 
 
 def save_preference(profile, consent, key, value, source="explicit"):
+    if (consent.store_id != profile.store_id or consent.session_key != profile.session_key
+            or consent.profile_id not in (None, profile.pk) or consent.status != Consent.Status.GRANTED
+            or consent.purpose != Consent.Purpose.PREFERENCES):
+        raise ValueError("La preferencia requiere consentimiento vigente del titular.")
     pref, _ = Preference.objects.update_or_create(
         profile=profile, key=key[:40],
         defaults={"value": str(value)[:120], "source": source, "consent": consent},
@@ -118,9 +138,12 @@ def save_preference(profile, consent, key, value, source="explicit"):
 
 def authorized_preferences(profile, store, session_key):
     """Solo preferencias con consentimiento vigente (A14)."""
-    if not has_consent(store, session_key, Consent.Purpose.PREFERENCES, profile):
+    if profile is None or not has_consent(store, session_key, Consent.Purpose.PREFERENCES, profile):
         return {}
-    return {p.key: p.value for p in profile.preferences.all()}
+    return {p.key: p.value for p in profile.preferences.filter(
+        consent__store=store, consent__session_key=session_key,
+        consent__purpose=Consent.Purpose.PREFERENCES, consent__status=Consent.Status.GRANTED,
+    ).filter(Q(consent__profile=profile) | Q(consent__profile__isnull=True))}
 
 
 def delete_profile_memory(store, session_key, profile):
@@ -131,6 +154,8 @@ def delete_profile_memory(store, session_key, profile):
     para su propia finalidad) ni documentos públicos de la tienda.
     """
     from .models import AIConversation
+    if profile.store_id != store.pk or profile.session_key != session_key:
+        return False
     profile.measurements.all().delete()
     profile.preferences.all().delete()
     profile.memory_summaries.all().delete()
@@ -145,7 +170,7 @@ def consent_state(store, session_key, profile=None):
     """Estado visible de permisos para la pantalla de privacidad."""
     qs = Consent.objects.filter(store=store, session_key=session_key)
     if profile is not None:
-        qs = qs.filter(profile__in=(profile, None))
+        qs = qs.filter(Q(profile=profile) | Q(profile__isnull=True))
     state = {}
     for purpose, label in Consent.Purpose.choices:
         c = qs.filter(purpose=purpose).order_by("-granted_at").first()

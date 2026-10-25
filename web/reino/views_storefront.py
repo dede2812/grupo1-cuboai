@@ -34,7 +34,7 @@ def _profile(request, store):
     pid = tenancy.active_profile_id(request, store)
     if not pid:
         return None
-    return services_memory.get_profile(store, request.session.session_key, pid)
+    return services_memory.get_profile(store, tenancy.owner_key(request), pid)
 
 
 def _measurement(request, store, profile):
@@ -42,7 +42,7 @@ def _measurement(request, store, profile):
     if not profile:
         return None
     return services_memory.authorized_measurement(
-        store, request.session.session_key, profile)
+        store, tenancy.owner_key(request), profile)
 
 
 # ------------------------------------------------------------------- S01 ----
@@ -161,6 +161,10 @@ def collection(request, store):
         fit = services_fit.evaluate_for_profile(p, measurement) if measurement and store.category == "moda canina" else None
         cards.append({"product": p, "fit": fit})
 
+    if q:
+        services_analytics.track_daily("search", store=store,
+            session_key=tenancy.owner_key(request), key=f"collection:{q}:{category}:{occasion}:{max_price}",
+            result_count=len(cards), source="collection")
     return render(request, "reino/collection.html", {
         "cards": cards, "q": q, "interpretation": interpretation,
         "categories": categories, "occasions": occasions,
@@ -218,9 +222,9 @@ def product_detail(request, store, product_slug):
         ],
     }, ensure_ascii=False)
 
-    services_analytics.track("product_view", store=store,
-                             session_key=request.session.session_key or "",
-                             request_id=request.GET.get("_r"),
+    services_analytics.track_daily("product_view", store=store,
+                             session_key=tenancy.owner_key(request) or "",
+                             key=str(product.public_id),
                              product=str(product.public_id))
     return render(request, "reino/product_detail.html", {
         "product": product, "variant_rows": variant_rows, "fit": fit,
@@ -237,22 +241,24 @@ def product_detail(request, store, product_slug):
 def smart_fit(request, store):
     """S05 · Smart Fit: tres medidas, cuatro estados honestos, cm/in equivalentes."""
     profile = _profile(request, store)
+    products = Product.objects.filter(store=store, status=Product.Status.PUBLISHED).order_by("short_title")
+    selected_product = request.POST.get("producto", request.GET.get("producto", "")).strip()
     product = None
-    if request.GET.get("producto"):
-        product = Product.objects.filter(
-            store=store, slug=request.GET["producto"], status=Product.Status.PUBLISHED
-        ).first()
-
-    result, errors, values = None, {}, {}
+    result, errors, values, results = None, {}, {"unit": "cm"}, []
+    if selected_product:
+        product = products.filter(slug=selected_product).first()
+        if product is None:
+            errors["producto"] = "Elegí una prenda publicada de esta tienda."
+    measurement = None
     # GET con ?producto= y medidas guardadas (autorizadas): evaluación directa.
     if request.method == "GET" and product and profile:
-        latest = _measurement(request, store, profile)
-        if latest:
-            result = services_fit.evaluate_for_profile(product, latest)
+        measurement = _measurement(request, store, profile)
     if request.method == "POST":
         unit = request.POST.get("unit", "cm")
         values = {k: request.POST.get(k, "").strip() for k in ("chest", "neck", "back")}
         values["unit"] = unit
+        if unit not in ("cm", "in"):
+            errors["unit"] = "Elegí centímetros o pulgadas."
         try:
             chest = services_fit.to_cm(values["chest"], unit) if values["chest"] else None
         except services_fit.InvalidMeasurement as exc:
@@ -271,7 +277,7 @@ def smart_fit(request, store):
             if remember and profile:
                 # Guardar requiere consentimiento explícito y separado (R07).
                 services_memory.grant_consent(
-                    store, request.session.session_key,
+                    store, tenancy.owner_key(request),
                     services_memory.Consent.Purpose.MEASUREMENTS, profile)
                 measurement = services_memory.save_measurement(
                     profile, chest_cm=chest, neck_cm=neck, back_cm=back,
@@ -280,17 +286,34 @@ def smart_fit(request, store):
             else:
                 # «Calcular sin guardar»: evaluación temporal, nada persiste.
                 measurement = services_fit.SimpleMeasurement(chest, neck, back)
-            if product:
-                result = services_fit.evaluate_for_profile(product, measurement)
         elif not errors:
             errors["chest"] = "Ingresá al menos una medida para evaluar."
 
-    products = Product.objects.filter(store=store, status=Product.Status.PUBLISHED)
+    if measurement is not None and not errors:
+        from django.db.models import Sum
+        from django.utils import timezone
+        from .models import StockReservation
+        evaluated_products = ([product] if product else
+            list(products.filter(fit_rules__is_active=True).distinct().prefetch_related("variants")))
+        variant_ids = [v.pk for p in evaluated_products for v in p.variants.all()]
+        reserved = dict(StockReservation.objects.filter(
+            variant_id__in=variant_ids, status=StockReservation.Status.ACTIVE,
+            expires_at__gt=timezone.now()).values("variant_id").annotate(
+                units=Sum("quantity")).values_list("variant_id", "units"))
+        for candidate_product in evaluated_products:
+            fit = services_fit.evaluate_for_profile(candidate_product, measurement)
+            available = [v.option_label for v in candidate_product.variants.all()
+                if v.is_active and v.stock - reserved.get(v.pk, 0) > 0
+                and any(services_fit.label_matches(label, v.option_label) for label in fit["candidates"])]
+            results.append({"product": candidate_product, "fit": fit, "available_sizes": available})
+        if product:
+            result = results[0]["fit"]
     return render(request, "reino/smartfit.html", {
         "profile": profile, "product": product, "result": result, "errors": errors,
-        "values": values, "products": products,
+        "values": values, "products": products, "selected_product": selected_product,
+        "results": results, "evaluated": measurement is not None and not errors,
         "latest": _measurement(request, store, profile),
-    })
+    }, status=400 if "producto" in errors else 200)
 
 
 # ------------------------------------------------------------------- S07 ----
@@ -298,7 +321,7 @@ def smart_fit(request, store):
 @_store_view
 def cart_view(request, store):
     """S07 · Carrito: confirmar la selección; envío por calcular."""
-    cart = commerce.get_open_cart(store, request.session.session_key)
+    cart = commerce.get_open_cart(store, tenancy.owner_key(request))
     summary = commerce.cart_summary(cart) if cart else None
     return render(request, "reino/cart.html", {
         "cart": cart, "summary": summary,
@@ -319,13 +342,17 @@ def digital_download(request, store, token):
             "store": store, "error": error}, status=410)
     # Autorización: el pedido del grant debe pertenecer a esta sesión.
     session_orders = set(request.session.get(f"reino_orders_{store.slug}", []))
-    owns_cart = grant.order.cart and grant.order.cart.session_key == request.session.session_key
-    if not owns_cart and str(grant.order.public_id) not in session_orders:
+    owns_cart = grant.order.cart and grant.order.cart.session_key == tenancy.owner_key(request)
+    if grant.order.store_id != store.pk or (not owns_cart and str(grant.order.public_id) not in session_orders):
         return render(request, "reino/download_error.html", {
             "store": store,
             "error": "Esta descarga pertenece a otra compra. Abrila desde tu pedido."},
             status=403)
-    services_fulfillment.register_download(grant)
+    try:
+        services_fulfillment.register_download(grant)
+    except services_fulfillment.FulfillmentError:
+        return render(request, "reino/download_error.html", {
+            "store": store, "error": "Esta descarga ya no está disponible. Revisá el estado de tu pedido."}, status=410)
     from django.http import FileResponse
     return FileResponse(grant.asset.file.open("rb"),
                         as_attachment=True,
@@ -347,7 +374,7 @@ def cart_add(request, store):
     if variant is None:
         request.session["reino_cart_error"] = "Esa variante ya no está disponible."
         return redirect("reino_cart", slug=store.slug)
-    cart = commerce.get_open_cart(store, request.session.session_key, create=True)
+    cart = commerce.get_open_cart(store, tenancy.owner_key(request), create=True)
     slot = None
     if variant.product.offer_type == "service":
         from .models import ServiceSlot
@@ -359,8 +386,10 @@ def cart_add(request, store):
     except (commerce.CartError, commerce.StockConflict) as exc:
         request.session["reino_cart_error"] = str(exc)
         return redirect("reino_cart", slug=store.slug)
-    services_analytics.track("cart_added", store=store,
-                             session_key=request.session.session_key or "",
+    services_analytics.track_once("cart_added", store=store,
+                             session_key=tenancy.owner_key(request) or "",
+                             key=f"{cart.public_id}:{cart.version}", cart=str(cart.public_id),
+                             product=str(variant.product.public_id),
                              variant=str(variant.public_id),
                              quantity=int(request.POST.get("quantity", 1)))
     return redirect("reino_cart", slug=store.slug)
@@ -369,7 +398,7 @@ def cart_add(request, store):
 @_store_view
 @require_POST
 def cart_update(request, store, item_id):
-    cart = commerce.get_open_cart(store, request.session.session_key)
+    cart = commerce.get_open_cart(store, tenancy.owner_key(request))
     if cart:
         try:
             commerce.update_item(cart, item_id, request.POST.get("quantity", 1))
@@ -381,7 +410,7 @@ def cart_update(request, store, item_id):
 @_store_view
 @require_POST
 def cart_remove(request, store, item_id):
-    cart = commerce.get_open_cart(store, request.session.session_key)
+    cart = commerce.get_open_cart(store, tenancy.owner_key(request))
     if cart:
         commerce.remove_item(cart, item_id)
     return redirect("reino_cart", slug=store.slug)
@@ -397,11 +426,13 @@ def checkout(request, store):
     La clave de intento es POR TIENDA (R01); el resumen aprobado queda ligado
     a su contenido (R02); modalidad/zona/tarifa se validan en servidor (R06).
     """
-    session_key = request.session.session_key
+    session_key = tenancy.owner_key(request)
     cart = commerce.get_open_cart(store, session_key)
     if cart is None:
         return redirect("reino_cart", slug=store.slug)
 
+    services_analytics.track_once("checkout_started", store=store, session_key=session_key,
+                                 key=str(cart.public_id), cart=str(cart.public_id))
     idem_key = f"reino_idem_{store.slug}"  # un intento por tienda, jamás compartido (R01)
     zones = ShippingZone.objects.filter(store=store, is_active=True)
     errors = {}
@@ -463,8 +494,9 @@ def checkout(request, store):
                     # confirmar un resumen obsoleto.
                     step = "review"
                 if step == "review":
-                    services_analytics.track("checkout_reviewed", store=store,
-                                             session_key=request.session.session_key or "",
+                    services_analytics.track_once("checkout_reviewed", store=store,
+                                             session_key=tenancy.owner_key(request) or "",
+                                             key=f"{session.public_id}:{session.revision}",
                                              revision=session.revision)
                     return render(request, "reino/checkout_review.html", {
                         "cart": cart, "summary": commerce.cart_summary(cart, payment_method),
@@ -484,9 +516,13 @@ def checkout(request, store):
                     errors["confirm"] = str(exc)
                 else:
                     services_analytics.track("order_placed", store=store,
-                                             session_key=request.session.session_key or "",
+                                             session_key=tenancy.owner_key(request) or "",
                                              request_id=f"order-{order.public_id}",
                                              order=order.reference, total=str(order.total))
+                    if order.discount_amount:
+                        services_analytics.track_once("promotion_applied", store=store,
+                            session_key=tenancy.owner_key(request), key=str(order.public_id),
+                            order=order.reference, discount=str(order.discount_amount))
                     request.session.pop(idem_key, None)
                     # La compra queda ligada a esta sesión: autoriza las
                     # descargas digitales de ESTE pedido (A33).
@@ -499,9 +535,11 @@ def checkout(request, store):
     summary = commerce.cart_summary(cart, payment_method)
     if summary["is_empty"]:
         return redirect("reino_cart", slug=store.slug)
+    from .services_payments import configured_checkout_options
     return render(request, "reino/checkout.html", {
         "cart": cart, "summary": summary, "zones": zones, "errors": errors,
         "data": data, "idem": request.session.get(idem_key, uuid.uuid4().hex),
+        "payment_options": configured_checkout_options(store, payment_method),
     })
 
 
@@ -525,18 +563,23 @@ def order_detail(request, store, public_id, token=None):
         "items", "events").first()
     if order is None:
         return render(request, "reino/order.html", {"order": None}, status=404)
-    owner_session = order.cart and order.cart.session_key == request.session.session_key
+    owner_session = order.cart and order.cart.session_key == tenancy.owner_key(request)
     if not owner_session and str(order.access_token) != str(token):
         # Un número adivinado no autentica: sin datos privados (A25).
         return render(request, "reino/order.html", {"order": None}, status=404)
     grants = []
     if order.payment_status == Order.PaymentStatus.PAID:
         grants = order.digital_grants.select_related("asset__product")
+    from . import services_payments
+    active_payment = order.payment_attempts.filter(provider__in=("paypal", "wompi", "btcpay")).exclude(
+        state__in=services_payments.TERMINAL).first()
     return render(request, "reino/order.html", {
         "order": order,
         "payment_label": dict(Order.PaymentStatus.choices).get(order.payment_status),
         "digital_grants": grants,
         "bookings": order.bookings.select_related("slot"),
+        "payment_options": services_payments.checkout_options(order),
+        "active_payment": active_payment if order.payment_status == "pending" else None,
     })
 
 

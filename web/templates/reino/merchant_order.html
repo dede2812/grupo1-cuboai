@@ -1,11 +1,11 @@
 {% extends "reino/merchant_base.html" %}
+{% load static %}
 {% block title %}Pedido {{ order.reference }} · {{ store.name }}{% endblock %}
 {% block panel %}
 <p class="eyebrow"><a href="{% url 'reino_merchant_orders' store.slug %}">← Pedidos</a></p>
 <h1 class="mt-0">{{ order.reference }}</h1>
+{% if capabilities.fulfilment %}<a class="btn btn--secondary" href="{% url 'reino_merchant_shipments' store.slug order.public_id %}">Gestionar despachos y seguimiento</a>{% endif %}
 <p class="muted small">{{ order.created_at|date:"d/m/Y H:i" }} · {{ order.customer_name }} · {{ order.customer_email }}{% if order.customer_phone %} · {{ order.customer_phone }}{% endif %}</p>
-
-{% if reino_flash %}<p class="form-errors" role="alert">{{ reino_flash }}</p>{% endif %}
 
 <div class="grid grid--2" style="margin-top:16px">
     <div class="looklab-card">
@@ -42,7 +42,7 @@
         <form method="post" action="{% url 'reino_merchant_order_transition' store.slug order.public_id %}">
             {% csrf_token %}
             <div class="field--inline">
-                <div class="field"><label for="field">Dimensión</label>
+                <div class="field"><label for="field">Actualizar</label>
                     <select id="field" name="field">
                         {% if capabilities.payments %}<option value="payment_status">Pago</option>{% endif %}
                         {% if capabilities.orders %}<option value="status">Pedido</option>{% endif %}
@@ -50,23 +50,19 @@
                         <option value="delivery_status">Entrega</option>{% endif %}
                     </select></div>
                 <div class="field"><label for="to">Nuevo estado</label>
-                    <input id="to" name="to" list="states" placeholder="paid, ready, shipped…">
-                    <datalist id="states">
-                        <option value="paid"><option value="failed"><option value="expired"><option value="refunded">
-                        <option value="confirmed"><option value="cancelled"><option value="closed">
-                        <option value="preparing"><option value="ready">
-                        <option value="scheduled"><option value="shipped"><option value="delivered"><option value="incident"><option value="returned">
-                    </datalist></div>
+                    <select id="to" name="to" required><option value="">Elegí qué actualizar</option></select></div>
             </div>
             <div class="field"><label for="note">Evidencia / referencia <span class="muted">(obligatoria para confirmar cobros y reembolsos; una foto NO confirma el pago)</span></label>
                 <input id="note" name="note" maxlength="200"></div>
-            <div class="field"><label for="refund_amount">Importe del reembolso <span class="muted">(solo si aplica)</span></label>
+            <div class="field"><label for="refund_amount">Total reembolsado acumulado <span class="muted">(solo si aplica)</span></label>
                 <input id="refund_amount" name="refund_amount" inputmode="decimal"></div>
-            <button class="btn btn--primary" type="submit">Aplicar transición</button>
+            <button class="btn btn--primary" type="submit">Guardar estado</button>
         </form>
+        {{ transition_options|json_script:"order-transition-options" }}
+        <script src="{% static 'reino/js/merchant-order.js' %}" defer></script>
         {% endif %}
-        <p class="help small" style="margin-top:10px">Las transiciones siguen la máquina de estados y quedan
-        registradas con tu usuario. El pago verificado es una decisión del equipo, nunca automática por comprobante.
+        <p class="help small" style="margin-top:10px">Cada cambio queda registrado con tu usuario y su referencia.
+        Verificá el ingreso antes de confirmar un pago; subir un comprobante no lo confirma.
         Cancelar un pedido no expedido devuelve el inventario automáticamente (una sola vez).</p>
     </div>
 </div>

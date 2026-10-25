@@ -58,4 +58,4 @@ jobs:
         run: python manage.py migrate --noinput
       - name: Suite completa en PostgreSQL (SIN skips de concurrencia, AC20)
         working-directory: web
-        run: python manage.py test reino  # plataforma multi-tenant (PG-compatible); la app legacy corre en el job sqlite
+        run: python manage.py test --noinput

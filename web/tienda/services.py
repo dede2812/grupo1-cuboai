@@ -739,7 +739,7 @@ def _create_order(quotes, customer, cart=None):
     with transaction.atomic():
         ids = [q.pk for q in quotes]
         locked = list(
-            Quote.objects.select_for_update().select_related("dog").filter(pk__in=ids).order_by("pk")
+            Quote.objects.select_for_update(of=("self",)).select_related("dog").filter(pk__in=ids).order_by("pk")
         )
         if len(locked) != len(ids) or not locked:
             raise QuoteNotOrderable("missing")

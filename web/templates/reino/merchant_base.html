@@ -3,6 +3,7 @@
 <div class="panel-layout">
     <nav class="panel-nav" aria-label="Panel del comerciante">
         <a href="{% url 'reino_merchant' store.slug %}" {% if request.resolver_match.url_name == "reino_merchant" %}aria-current="page"{% endif %}>Resumen</a>
+        <a href="{% url 'reino_business_dashboard' store.slug %}" {% if request.resolver_match.url_name == "reino_business_dashboard" %}aria-current="page"{% endif %}>Estadísticas</a>
         <a href="{% url 'reino_merchant_catalog' store.slug %}" {% if "catalog" in request.resolver_match.url_name or "product" in request.resolver_match.url_name or "variant" in request.resolver_match.url_name %}aria-current="page"{% endif %}>Catálogo</a>
         <a href="{% url 'reino_merchant_orders' store.slug %}" {% if "order" in request.resolver_match.url_name %}aria-current="page"{% endif %}>Pedidos</a>
         <a href="{% url 'reino_merchant_customers' store.slug %}" {% if request.resolver_match.url_name == "reino_merchant_customers" %}aria-current="page"{% endif %}>Clientes</a>

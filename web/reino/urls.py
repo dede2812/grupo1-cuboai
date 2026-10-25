@@ -7,7 +7,7 @@
   /plataforma/ (P02 mínimo).
 """
 
-from django.urls import path
+from django.urls import include, path
 
 from . import (
     views_account, views_design, views_explore, views_health, views_looklab, views_merchant,
@@ -15,6 +15,8 @@ from . import (
 )
 
 urlpatterns = [
+    path("", include("reino.urls_shipping")),
+    path("", include("reino.urls_auth")),
     path("salud/", views_health.health, name="reino_health"),
     path("pagos/webhook/<str:provider>/", views_payments.payment_webhook,
          name="reino_payment_webhook"),
@@ -62,6 +64,7 @@ urlpatterns = [
 
     # S10 · cuenta / Royal Passport
     path("cuenta/", views_account.account_home, name="reino_account"),
+    path("cuenta/perfiles/<uuid:public_id>/preferencias/", views_account.profile_preferences, name="reino_profile_preferences"),
     path("cuenta/perfiles/nuevo/", views_account.profile_create, name="reino_profile_create"),
     path("cuenta/perfiles/<uuid:public_id>/medidas/", views_account.profile_measurements, name="reino_profile_measure"),
     path("cuenta/perfiles/<uuid:public_id>/activar/", views_account.profile_activate, name="reino_profile_activate"),

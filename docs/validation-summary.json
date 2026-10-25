@@ -1,0 +1,49 @@
+{
+  "date": "2026-10-25",
+  "base_commit": "2ca484130e7c6bb77dcb7d66002d6d49f5d4bde6",
+  "branch": "feature/fluso-kingdom-mvp",
+  "backend": {
+    "sqlite": {
+      "total": 655,
+      "passed": 647,
+      "skipped": 8,
+      "failures": 0,
+      "seconds": 215.088,
+      "log_sha256": "3608cb8f48425cec50e37ef4388a59147cbeb33f78459c4d9e88c8af2e5ca2e5"
+    },
+    "postgres": {
+      "total": 655,
+      "passed": 654,
+      "skipped": 1,
+      "failures": 0,
+      "seconds": 344.168,
+      "log_sha256": "d7dd37328f90b40f7d78da7e5ed0185c42064fa2f47f4bb5020bca4178ac99b0"
+    }
+  },
+  "browser": {
+    "browser": {
+      "checks": 135,
+      "widths": [
+        390,
+        768,
+        1440
+      ],
+      "failures": 0,
+      "js_errors": 0,
+      "report_sha256": "de6156333e849ed11380c88243947d084a6bd709e0bb7e6b5bccf573152b8323"
+    },
+    "browser-anonymous": {
+      "checks": 9,
+      "widths": [
+        390,
+        768,
+        1440
+      ],
+      "failures": 0,
+      "js_errors": 0,
+      "report_sha256": "f82f9e5a8ce48aa74a3c561c4e50259c8f33b9ffd10679a6baed666428b9a0dc"
+    }
+  },
+  "external_providers_verified": false,
+  "windows_exe_generated": false
+}

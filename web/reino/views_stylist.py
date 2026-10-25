@@ -6,6 +6,7 @@
 - La conversación nunca bloquea el checkout.
 """
 
+from django.conf import settings
 from django.http import JsonResponse
 from django.shortcuts import redirect, render  # redirect: confirmación HTTP (N01)
 from django.views.decorators.http import require_POST
@@ -24,7 +25,7 @@ EXAMPLES = [
 
 
 def _ctx(request, store):
-    session_key = request.session.session_key
+    session_key = tenancy.owner_key(request)
     pid = tenancy.active_profile_id(request, store)
     profile = services_memory.get_profile(store, session_key, pid) if pid else None
     return ToolContext(store, session_key, profile)
@@ -32,8 +33,26 @@ def _ctx(request, store):
 
 @_store_view
 def stylist(request, store):
-    conversation = get_conversation(store, request.session.session_key)
-    messages = conversation.messages.filter(role__in=("user", "assistant"))
+    conversation = get_conversation(store, tenancy.owner_key(request))
+    messages = list(conversation.messages.filter(role__in=("user", "assistant"))
+                    .order_by("-created_at", "-pk")[:50])[::-1]
+    # Saved messages are historical; visible product cards are always rebuilt
+    # from the current tenant catalog, including updated prices/media.
+    from uuid import UUID
+    from . import services_visibility
+    from .ai.tools import _card
+    identifiers = set()
+    for message in messages:
+        for card in message.cards or []:
+            try:
+                identifiers.add(UUID(str(card.get("product_id"))))
+            except (ValueError, TypeError, AttributeError):
+                continue
+    products = {str(p.public_id): p for p in services_visibility.visible_products(store=store)
+                .filter(public_id__in=identifiers).select_related("store").prefetch_related("media", "variants")}
+    for message in messages:
+        message.cards = [_card(products[c["product_id"]]) for c in message.cards or []
+                         if isinstance(c, dict) and c.get("product_id") in products]
     return render(request, "reino/stylist.html", {
         "conversation": conversation,
         "messages": messages,
@@ -50,7 +69,7 @@ def stylist_memory_mode(request, store):
     """Activa/desactiva el modo «sin guardar» (§10): al activarlo, la
     conversación deja de persistirse y el proveedor sólo ve el turno actual;
     al desactivarlo vuelve el historial normal. La elección es visible."""
-    conversation = get_conversation(store, request.session.session_key)
+    conversation = get_conversation(store, tenancy.owner_key(request))
     conversation.memory_off = request.POST.get("memory_off") == "1"
     conversation.save(update_fields=["memory_off"])
     if conversation.memory_off:
@@ -65,10 +84,12 @@ def stylist_memory_mode(request, store):
 @require_POST
 def stylist_message(request, store):
     """Recibe un mensaje y devuelve la respuesta (HTML parcial o JSON)."""
-    text = (request.POST.get("message") or "").strip()[:500]
+    text = (request.POST.get("message") or "").strip()
     if not text:
         return JsonResponse({"error": "empty_message"}, status=400)
-    conversation = get_conversation(store, request.session.session_key)
+    if len(text) > settings.REINO_AI.get("MAX_INPUT_CHARS", 8000):
+        return JsonResponse({"error": "message_too_long", "detail": "El mensaje supera el límite de caracteres."}, status=400)
+    conversation = get_conversation(store, tenancy.owner_key(request))
     ctx = _ctx(request, store)
     reply = respond(conversation, text, ctx)
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":

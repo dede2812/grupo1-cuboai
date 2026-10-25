@@ -15,11 +15,16 @@
 
     {% if order.payment_status == "paid" %}
     <p class="flash-ok" role="status">Pago confirmado.</p>
+    {% elif order.payment_status == "refunded" or order.payment_status == "partially_refunded" %}
+    <p class="mode-note" role="status">{{ order.get_payment_status_display }}.{% if order.refund_amount %} Importe devuelto: ${{ order.refund_amount }}.{% endif %}</p>
+    {% elif order.payment_status == "failed" or order.payment_status == "expired" or order.payment_status == "disputed" %}
+    <p class="form-error" role="status">{{ order.get_payment_status_display }}. Consultá con la tienda para resolver el estado del pago.</p>
     {% else %}
     <p class="mode-note" role="status">Tu pedido está registrado. <strong>El pago está pendiente de verificación.</strong>
     El equipo te contacta para coordinar{% if order.payment_method == "bitcoin" %} la transferencia Bitcoin y aplicar tu 15 % de descuento{% endif %}.</p>
     {% endif %}
 
+    {% include "reino/_payment_options.html" %}
     {# Tres bloques separados: Pago, Preparación, Entrega #}
     <div class="steps-3" style="margin:28px 0">
         <div class="step-card">
@@ -63,7 +68,7 @@
         {% for grant in digital_grants %}
         <div class="reveal__line">
             <div style="flex:1"><strong>{{ grant.asset.product.short_title }}</strong>
-            <span class="small muted">· v{{ grant.asset.version }} · quedan {{ grant.max_downloads|add:"-1" }} descargas como máximo</span></div>
+            <span class="small muted">· v{{ grant.asset.version }} · {{ grant.downloads }} de {{ grant.max_downloads }} descargas utilizadas</span></div>
             <a class="btn btn--primary btn--sm" href="{% url 'reino_digital_download' reino_store.slug grant.token %}">Descargar</a>
         </div>
         {% endfor %}

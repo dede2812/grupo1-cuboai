@@ -12,7 +12,7 @@ from django.contrib.auth.models import User
 from reino import models as m
 
 BACKUP_MODELS = [
-    User,  # cuentas del panel (hash, jamás contraseña en claro)
+    User, m.CustomerIdentity,  # cuentas y propietario persistente (sin contraseña en claro)
     m.Merchant, m.Store, m.MerchantMember, m.CategorySchema,
     m.AttributeDefinition, m.AttributeValue, m.Product, m.FitRule, m.Variant,
     m.ProductMedia, m.MediaAsset, m.StoreThemeVersion, m.ShippingZone,
@@ -23,7 +23,7 @@ BACKUP_MODELS = [
     m.RecipientProfile, m.Measurement, m.Consent, m.Preference, m.MemorySummary,
     m.Look, m.KnowledgeDocument, m.AIConversation, m.AIMessage,
     m.RecommendationEvent, m.ActionToken, m.OutboxEvent,
-    m.IntegrationState, m.AnalyticsEvent, m.ComparisonSession,
+    m.IntegrationState, m.AnalyticsEvent, m.ComparisonSession, m.AIUsageCounter,
 ]
 
 

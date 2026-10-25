@@ -7,14 +7,12 @@ sin clave de IA: reglas, filtros visibles y estado compartible por URL.
 from django.shortcuts import redirect, render
 from django.views.decorators.http import require_POST
 
-from . import services_analytics, services_compare, services_search
+from . import services_analytics, services_compare, services_search, tenancy
 from .models import Variant
 
 
 def _session_key(request):
-    if not request.session.session_key:
-        request.session.create()
-    return request.session.session_key
+    return tenancy.ensure_session(request)
 
 
 def explore(request):
@@ -30,19 +28,31 @@ def search(request):
     """P04 · Búsqueda universal del catálogo disponible (reglas, sin IA)."""
     q = request.GET.get("q", "").strip()
     occasion = request.GET.get("ocasion", "")
-    max_price = request.GET.get("max", "").strip()
+    raw_max_price = request.GET.get("max", "").strip()
     category = request.GET.get("categoria", "")
     from decimal import Decimal, InvalidOperation
+    price_error = ""
     try:
-        max_price = Decimal(max_price) if max_price else None
+        max_price = Decimal(raw_max_price) if raw_max_price else None
+        if max_price is not None and (not max_price.is_finite() or max_price < 0):
+            raise InvalidOperation
     except InvalidOperation:
         max_price = None
+        price_error = "Ingresá un precio máximo válido, mayor o igual a cero."
+    searched = bool(q or occasion or category or raw_max_price)
     results = services_search.search_catalog(
-        q, occasion=occasion, max_price=max_price, category=category) if q or occasion or max_price else []
+        q, occasion=occasion, max_price=max_price, category=category) if searched and not price_error else []
+    if searched and not price_error:
+        # A platform search is not arbitrarily attributed to each merchant.
+        services_analytics.track_daily("search", session_key=_session_key(request),
+            key=f"platform:{q}:{occasion}:{max_price}:{category}",
+            result_count=len(results), source="platform")
     return render(request, "reino/buscar.html", {
-        "q": q, "occasion": occasion, "max_price": max_price or "",
+        "q": q, "occasion": occasion,
+        "max_price": max_price if max_price is not None else "",
+        "price_error": price_error,
         "category": category, "results": results,
-        "searched": bool(q or occasion or max_price),
+        "searched": searched,
         "examples": ["algo para paseo", "regalo por menos de $30", "para celebración"],
     })
 

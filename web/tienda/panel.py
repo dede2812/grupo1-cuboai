@@ -1,6 +1,6 @@
 from functools import wraps
 
-from django.contrib.auth.views import redirect_to_login
+from django.contrib.auth.views import LoginView, redirect_to_login
 from django.db.models import Q
 from django.http import Http404, HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
@@ -10,6 +10,19 @@ from .forms import CostForm
 from .models import Order
 
 PAGE_SIZE = 25
+
+
+class PanelLoginView(LoginView):
+    """Use the same database-backed quota as the customer login endpoint."""
+
+    def post(self, request, *args, **kwargs):
+        from reino.views_auth import _allow_attempt
+        if not _allow_attempt(request, "login", 20):
+            # An unbound form avoids checking credentials after quota exhaustion.
+            form = self.get_form_class()(request=request)
+            return self.render_to_response(
+                self.get_context_data(form=form, rate_limited=True), status=429)
+        return super().post(request, *args, **kwargs)
 
 
 def _int_or_none(raw):
@@ -27,6 +40,15 @@ def staff_required(view):
             return redirect_to_login(request.get_full_path())
         if not (user.is_active and user.is_staff):
             return HttpResponseForbidden("Staff access only.")
+        # Merchant onboarding must not grant access to the historical WK ledger.
+        from reino.models import MerchantMember
+        # Retain inactive memberships in this check: revoking a merchant role
+        # must never turn that account into an unrestricted legacy staff user.
+        memberships = MerchantMember.objects.filter(user=user)
+        if not user.is_superuser and memberships.exists() and not memberships.filter(
+            merchant__stores__slug="wiener-kingdom", role="owner", is_active=True
+        ).exists():
+            return HttpResponseForbidden("No tenés permiso para el panel histórico de Wiener Kingdom.")
         return view(request, *args, **kwargs)
 
     return wrapper

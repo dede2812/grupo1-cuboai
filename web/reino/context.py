@@ -11,7 +11,7 @@ def reino_context(request):
            "reino_profiles": [], "reino_theme": None, "reino_theme_css": "",
            "reino_compare_count": 0,
            "reino_flash": request.session.pop("reino_flash", None)}
-    key = request.session.session_key
+    key = tenancy.owner_key(request)
     if key:
         ctx["reino_compare_count"] = len(
             services_compare.get_tray(key).items) if key else 0

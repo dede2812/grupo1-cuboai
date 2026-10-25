@@ -1,0 +1,7 @@
+{% if page.has_other_pages %}
+<nav class="pill-row" aria-label="Páginas" style="margin-top:24px">
+{% if page.has_previous %}<a class="btn btn--secondary" href="?page={{ page.previous_page_number }}{% if selected %}&amp;estado={{ selected|urlencode }}{% endif %}">Anterior</a>{% endif %}
+<span class="small">Página {{ page.number }} de {{ page.paginator.num_pages }} · {{ page.paginator.count }} registros</span>
+{% if page.has_next %}<a class="btn btn--secondary" href="?page={{ page.next_page_number }}{% if selected %}&amp;estado={{ selected|urlencode }}{% endif %}">Siguiente</a>{% endif %}
+</nav>
+{% endif %}

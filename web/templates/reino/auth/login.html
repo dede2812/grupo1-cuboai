@@ -1,0 +1,17 @@
+{% extends "reino/base.html" %}
+{% block title %}Ingresar · Reino Commerce{% endblock %}
+{% block content %}
+<section class="section container" style="max-width:560px">
+    <p class="eyebrow">Tu cuenta</p>
+    <h1>Todo lo tuyo, en un lugar.</h1>
+    <p class="muted">Volvé a tus perfiles, looks, pedidos y carrito desde cualquier dispositivo.</p>
+    <form class="step-card" method="post">
+        {% csrf_token %}<input type="hidden" name="next" value="{{ next }}">
+        {% include "reino/auth/_fields.html" %}
+        <button class="btn btn--primary" type="submit">Ingresar</button>
+    </form>
+    <p>¿Primera visita? <a href="{% url 'reino_register' %}">Crear una cuenta</a></p>
+    <p class="small muted">También podés seguir comprando como invitado. Guardar datos en tu cuenta es opcional.</p>
+    <a href="{% url 'reino_account' %}">Continuar como invitado</a>
+</section>
+{% endblock %}

@@ -90,8 +90,8 @@ WK_PRODUCTS = [
         "category": "arnes", "occasions": ["paseo", "diario"], "styles": ["urban-king", "royal-classic"],
         "is_featured": True, "reason": "Ribete suave pensado para no pellizcar en paseos largos.",
         "images": [
-            ("tienda/img/beige-harness-1.jpg", "Arnés beige anti-rozaduras, vista frontal", "product"),
-            ("tienda/img/beige-harness-2.jpg", "Arnés beige, segundo ángulo", "detail"),
+            ("tienda/img/beige-harness-2.jpg", "Arnés beige anti-rozaduras, fotografía principal", "product"),
+            ("tienda/img/beige-harness-1.jpg", "Arnés beige, miniatura de referencia", "detail"),
         ],
         "materials": ["Tejido beige premium resistente", "Espuma de acolchado", "Ribete suave antipellizcos"],
         "care": ["Lavar a mano", "Secar al aire"],

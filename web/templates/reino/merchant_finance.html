@@ -3,12 +3,13 @@
 {% block panel %}
 <h1 class="mt-0">Finanzas y conciliación</h1>
 <p class="muted small">Cobros manuales verificados con evidencia. «Reembolsado» registra importe, medio y motivo: no es dinero devuelto por sí solo.</p>
+<p class="muted small">Indicadores en {{ store.currency }}. {% if other_currency_orders %}{{ other_currency_orders }} pedido(s) en otra moneda excluidos de los importes; no se aplica una conversión estimada.{% endif %}</p>
 
 {% if kpis %}
 <div class="stat-row" style="margin:18px 0">
-    <div class="stat"><span class="stat__n">${{ kpis.cobrado }}</span><span class="stat__l">Cobrado verificado</span></div>
+    <div class="stat"><span class="stat__n">{% if kpis.cobrado is not None %}${{ kpis.cobrado|floatformat:2 }}{% else %}Sin datos suficientes{% endif %}</span><span class="stat__l">Cobros menos reembolsos (incluye envío)</span></div>
     <div class="stat"><span class="stat__n">{{ kpis.pedidos }}</span><span class="stat__l">Pedidos pagados</span></div>
-    <div class="stat"><span class="stat__n">${{ kpis.ticket_medio }}</span><span class="stat__l">Ticket medio</span></div>
+    <div class="stat"><span class="stat__n">${{ kpis.ticket_medio|floatformat:2 }}</span><span class="stat__l">Ticket medio antes de reembolsos</span></div>
 </div>
 {% else %}
 <p class="empty-state" style="padding:24px 0">Sin datos suficientes: cuando haya pedidos con pago verificado, acá van los indicadores.</p>
@@ -20,7 +21,7 @@
     <thead><tr><th>Pedido</th><th>Fecha</th><th>Total</th><th>Método</th></tr></thead>
     <tbody>{% for o in pending %}<tr>
         <td><a href="{% url 'reino_merchant_order' store.slug o.public_id %}">{{ o.reference }}</a></td>
-        <td class="small">{{ o.created_at|date:"d/m H:i" }}</td><td>${{ o.total }}</td>
+        <td class="small">{{ o.created_at|date:"d/m H:i" }}</td><td>{{ o.currency }} {{ o.total }}</td>
         <td>{{ o.get_payment_method_display }}</td>
     </tr>{% endfor %}</tbody>
 </table></div>
@@ -32,7 +33,7 @@
     <thead><tr><th>Pedido</th><th>Importe</th><th>Motivo y medio</th></tr></thead>
     <tbody>{% for o in refunds %}<tr>
         <td><a href="{% url 'reino_merchant_order' store.slug o.public_id %}">{{ o.reference }}</a></td>
-        <td>${{ o.refund_amount|default:o.total }}</td><td class="small">{{ o.refund_note }}</td>
+        <td>{% if o.refund_amount is not None %}{{ o.currency }} {{ o.refund_amount|floatformat:2 }}{% else %}Importe no registrado{% endif %}</td><td class="small">{{ o.refund_note }}</td>
     </tr>{% endfor %}</tbody>
 </table></div>
 {% else %}<p class="muted small">Ninguno registrado.</p>{% endif %}

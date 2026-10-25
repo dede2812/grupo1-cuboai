@@ -22,7 +22,7 @@ class FakeAdapter(PaymentAdapter):
     def create_payment(self, attempt):
         return AdapterResponse(
             ok=True, provider=self.key, state="requires_action",
-            external_ref=f"fake-{attempt.idempotency_key[:16]}",
+            external_ref=f"fake-{attempt.public_id}",
             redirect_url=f"/pagos/fake/{attempt.public_id}/",
             currency=attempt.currency, amount=str(attempt.amount),
         )

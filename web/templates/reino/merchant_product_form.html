@@ -12,19 +12,19 @@
     {% csrf_token %}
     <div class="field--inline">
         <div class="field"><label for="title">Título completo</label>
-            <input id="title" name="title" maxlength="160" required value="{{ data.title|default:product.title }}"></div>
+            <input id="title" name="title" maxlength="160" required value="{{ data.title }}"></div>
         <div class="field"><label for="short_title">Nombre corto</label>
-            <input id="short_title" name="short_title" maxlength="80" value="{{ data.short_title|default:product.short_title }}"></div>
+            <input id="short_title" name="short_title" maxlength="80" value="{{ data.short_title }}"></div>
     </div>
     <div class="field"><label for="subtitle">Beneficio verificable (una línea)</label>
-        <input id="subtitle" name="subtitle" maxlength="200" value="{{ data.subtitle|default:product.subtitle }}"></div>
+        <input id="subtitle" name="subtitle" maxlength="200" value="{{ data.subtitle }}"></div>
     <div class="field"><label for="description">Descripción</label>
-        <textarea id="description" name="description" rows="4">{{ data.description|default:product.description }}</textarea></div>
+        <textarea id="description" name="description" rows="4">{{ data.description }}</textarea></div>
     <div class="field--inline">
         <div class="field"><label for="category">Categoría</label>
-            <input id="category" name="category" maxlength="40" value="{{ data.category|default:product.category|default:'general' }}"></div>
+            <input id="category" name="category" maxlength="40" value="{{ data.category|default:'general' }}"></div>
         <div class="field"><label for="base_price">Precio base (USD)</label>
-            <input id="base_price" name="base_price" inputmode="decimal" required value="{{ data.base_price|default:product.base_price }}"></div>
+            <input id="base_price" name="base_price" inputmode="decimal" required value="{{ data.base_price }}"></div>
     </div>
     <div class="field--inline">
         <div class="field"><label for="occasions">Ocasiones (separadas por coma)</label>
@@ -35,7 +35,7 @@
     <div class="field"><label for="materials">Materiales (separados por coma)</label>
         <input id="materials" name="materials" value="{{ data.materials|join:', '|default:'' }}"></div>
     <div class="field"><label for="reason">Razón verificable para recomendarlo</label>
-        <input id="reason" name="reason" maxlength="160" value="{{ data.reason|default:product.reason }}"></div>
+        <input id="reason" name="reason" maxlength="160" value="{{ data.reason }}"></div>
     {% if product %}
     <div class="field"><label for="status">Estado</label>
         <select id="status" name="status">
@@ -45,11 +45,11 @@
         </select></div>
     {% endif %}
     <label style="display:flex;gap:10px;align-items:center;font-weight:600;margin-bottom:10px">
-        <input type="checkbox" name="is_featured" value="1" {% if product.is_featured %}checked{% endif %} style="width:18px;height:18px">
+        <input type="checkbox" name="is_featured" value="1" {% if data.is_featured %}checked{% endif %} style="width:18px;height:18px">
         Selección editorial de la casa
     </label>
     <label style="display:flex;gap:10px;align-items:center;font-weight:600;margin-bottom:18px">
-        <input type="checkbox" name="bitcoin_discount_eligible" value="1" {% if product.bitcoin_discount_eligible %}checked{% endif %} style="width:18px;height:18px">
+        <input type="checkbox" name="bitcoin_discount_eligible" value="1" {% if data.bitcoin_discount_eligible %}checked{% endif %} style="width:18px;height:18px">
         Participa en el descuento Bitcoin (elegibilidad aprobada por el negocio)
     </label>
     <button class="btn btn--primary" type="submit">Guardar</button>
@@ -67,10 +67,11 @@
             <td>{{ v.sku }}</td><td>{{ v.option_label }}</td>
             <td>${{ v.price }}{% if v.price_override %} <span class="small muted">(especial)</span>{% endif %}</td>
             <td>
+                <p class="small"><strong>{{ v.stock }}</strong> unidades en inventario</p>
                 <form method="post" action="{% url 'reino_merchant_variant_stock' store.slug v.pk %}" style="display:flex;gap:6px;align-items:center">
                     {% csrf_token %}
                     <input type="number" name="delta" value="1" style="width:64px" aria-label="Ajuste">
-                    <input type="text" name="reason" placeholder="Motivo (obligatorio)" required style="min-width:150px">
+                    <input type="text" name="reason" placeholder="Motivo (obligatorio)" aria-label="Motivo del ajuste de {{ v.sku }}" required style="min-width:150px">
                     <button class="btn btn--ghost btn--sm" type="submit">Ajustar</button>
                 </form>
             </td>

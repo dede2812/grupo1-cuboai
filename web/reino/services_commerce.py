@@ -117,6 +117,12 @@ def add_item(cart, variant: Variant, quantity=1, recipient=None, service_slot=No
     """
     if not variant.is_active or variant.product.status != "published":
         raise CartError("Esa variante ya no está disponible.")
+    try:
+        quantity = int(quantity)
+    except (TypeError, ValueError):
+        raise CartError("Ingresá una cantidad válida.") from None
+    if quantity < 1 or quantity > MAX_QUANTITY:
+        raise CartError(f"La cantidad debe ser entre 1 y {MAX_QUANTITY}.")
     if variant.product.offer_type == "service":
         if service_slot is None or service_slot.product_id != variant.product_id                 or not service_slot.is_active:
             raise CartError("Elegí una franja válida para reservar.")
@@ -124,12 +130,6 @@ def add_item(cart, variant: Variant, quantity=1, recipient=None, service_slot=No
             raise CartError("Esa franja ya no tiene cupo; elegí otra hora.")
     if variant.product.store_id != cart.store_id:
         raise CartError("La variante no pertenece a esta tienda.")
-    try:
-        quantity = int(quantity)
-    except (TypeError, ValueError):
-        raise CartError("Ingresá una cantidad válida.") from None
-    if quantity < 1 or quantity > MAX_QUANTITY:
-        raise CartError(f"La cantidad debe ser entre 1 y {MAX_QUANTITY}.")
     if variant.stock < 1:
         raise StockConflict("Sin existencias por ahora.", [variant.sku])
     with transaction.atomic():
@@ -139,6 +139,9 @@ def add_item(cart, variant: Variant, quantity=1, recipient=None, service_slot=No
             .first()
         )
         if item:
+            if item.service_slot_id != getattr(service_slot, "pk", None):
+                raise CartError("Esta opción ya está en el carrito con otra franja. "
+                                "Quitá esa línea antes de elegir un horario diferente.")
             item.quantity = min(item.quantity + quantity, MAX_QUANTITY)
             item.unit_price = variant.price
             item.save(update_fields=["quantity", "unit_price"])
@@ -401,6 +404,7 @@ def _create_order(checkout, idempotency_key, s, subtotal, discount, shipping,
             v.save(update_fields=["stock"])
             OrderItem.objects.create(
                 order=order, position=i, variant=v, sku=v.sku,
+                offer_type=v.product.offer_type,
                 service_slot_id=line.get("service_slot_id"),
                 title=v.product.short_title, option_label=v.option_label,
                 recipient_alias=line.get("recipient_alias", ""),
@@ -505,7 +509,8 @@ def apply_transition(order, field, to_value, user=None, note="", member=None,
       registra importe, medio y motivo: la etiqueta no es dinero devuelto.
     """
     capability = FIELD_CAPABILITY.get(field)
-    if member is not None and not member_can(member, capability):
+    if member is not None and (member.merchant_id != order.store.merchant_id or
+                               not member_can(member, capability)):
         raise PermissionDenied("Tu rol no permite esta operación.")
     if (field, to_value) in NEEDS_EVIDENCE and not note.strip():
         raise CartError("Esta operación requiere una referencia o motivo (evidencia).")
@@ -514,7 +519,10 @@ def apply_transition(order, field, to_value, user=None, note="", member=None,
         # Bloquear y releer: la autoridad es el estado actual en base de datos.
         order = Order.objects.select_for_update().get(pk=order.pk)
         from_value = getattr(order, field)
-        if from_value == to_value:
+        refund_update = (field == "payment_status" and to_value in (
+            Order.PaymentStatus.REFUNDED, Order.PaymentStatus.PARTIALLY_REFUNDED))
+        cumulative_refund = money(refund_amount) if refund_amount is not None else order.total
+        if from_value == to_value and not (refund_update and cumulative_refund > (order.refund_amount or 0)):
             return order  # repetición de una transición ya aplicada: no-op
 
         if order.status == Order.Status.CANCELLED and field != "payment_status":
@@ -524,16 +532,20 @@ def apply_transition(order, field, to_value, user=None, note="", member=None,
             raise CartError("A un pedido cancelado solo puede registrarse el reembolso.")
 
         allowed = TRANSITIONS.get(field, {}).get(from_value, [])
-        if to_value not in [str(v) for v in allowed]:
+        if to_value not in [str(v) for v in allowed] and not (from_value == to_value and refund_update):
             raise CartError(f"Transición no permitida: {field} → {to_value}.")
 
         setattr(order, field, to_value)
         update = [field]
         if field == "payment_status" and to_value in (
                 Order.PaymentStatus.REFUNDED, Order.PaymentStatus.PARTIALLY_REFUNDED):
-            amount = money(refund_amount) if refund_amount is not None else order.total
-            if amount <= 0 or amount > order.total:
+            amount = cumulative_refund
+            if amount <= 0 or amount > order.total or amount < (order.refund_amount or 0):
                 raise CartError("El reembolso debe ser mayor que cero y no superar lo cobrado.")
+            if to_value == Order.PaymentStatus.REFUNDED and amount != order.total:
+                raise CartError("Un reembolso total debe cubrir el total cobrado.")
+            if to_value == Order.PaymentStatus.PARTIALLY_REFUNDED and amount >= order.total:
+                raise CartError("Un reembolso parcial debe ser inferior al total cobrado.")
             order.refund_amount = amount
             order.refund_note = note.strip()[:200]
             update += ["refund_amount", "refund_note"]
@@ -556,6 +568,19 @@ def apply_transition(order, field, to_value, user=None, note="", member=None,
         # A33: el acceso digital nace sólo con el cobro confirmado.
         if field == "payment_status" and to_value == Order.PaymentStatus.PAID:
             services_fulfillment.grant_digital_entitlements(order, user=user)
+        event_name = None
+        if field == "payment_status" and to_value == Order.PaymentStatus.PAID:
+            event_name = "payment_verified"
+        elif refund_update:
+            event_name = "refund_recorded"
+        elif field == "status" and to_value == Order.Status.CANCELLED:
+            event_name = "order_cancelled"
+        if event_name:
+            from . import services_analytics
+            services_analytics.track_once(event_name, store=order.store,
+                key=f"{order.public_id}:{to_value}:{order.refund_amount or 0}",
+                order=str(order.public_id), amount=str(order.refund_amount if refund_update else order.total),
+                currency=order.currency)
     return order
 
 
@@ -570,13 +595,27 @@ def _restock_once(order, user=None, reason=""):
         locked = Order.objects.select_for_update().get(pk=order.pk)
         if locked.stock_restored_at is not None:
             return False  # ya restituido por otra solicitud
-        if locked.delivery_status in (Order.DeliveryStatus.SHIPPED, Order.DeliveryStatus.DELIVERED):
-            return False  # lo despachado no vuelve automáticamente: proceso de devolución
+        if not locked.shipments.exists():
+            departed_states = (Order.DeliveryStatus.SHIPPED, Order.DeliveryStatus.DELIVERED, Order.DeliveryStatus.RETURNED)
+            if (locked.delivery_status in departed_states or
+                    locked.events.filter(field='delivery_status', to_value__in=departed_states).exists()):
+                return False  # una incidencia posterior no borra la salida histórica
+        dispatched = {}
+        from .services_shipping import was_dispatched
+        for shipment in locked.shipments.prefetch_related("events"):
+            if not was_dispatched(shipment):
+                continue
+            for line in shipment.lines:
+                item_id = line["order_item_id"]
+                dispatched[item_id] = dispatched.get(item_id, 0) + line["quantity"]
         for item in locked.items.select_related("variant"):
             if item.variant_id is None:
                 continue
+            restore_quantity = max(0, item.quantity - dispatched.get(item.pk, 0))
+            if not restore_quantity:
+                continue
             v = Variant.objects.select_for_update().get(pk=item.variant_id)
-            v.stock += item.quantity
+            v.stock += restore_quantity
             v.save(update_fields=["stock"])
         locked.stock_restored_at = timezone.now()
         locked.save(update_fields=["stock_restored_at"])

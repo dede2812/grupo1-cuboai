@@ -1,3 +1,5 @@
+> Nota de cierre: este documento conserva la visión y decisiones originales de Fluso. El alcance implementado y las limitaciones vigentes están en [Funcionalidades](05_FUNCIONALIDADES.md) y [Estado final](15_ESTADO_FINAL_Y_TRAZABILIDAD.md). No interpretar capacidades planificadas como verificadas externamente.
+
 # 01 · Producto y diseño (F1)
 
 Adaptación del documento de diseño («WIENER KINGDOM — Diseño de producto y plan de

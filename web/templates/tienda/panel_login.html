@@ -9,7 +9,9 @@
 <section class="fit-layout fit-layout-single">
     <form class="fit-form" method="post" novalidate>
         {% csrf_token %}
-        {% if form.errors %}
+        {% if rate_limited %}
+        <p class="fit-alert" role="alert">Too many sign-in attempts. Try again in 15 minutes.</p>
+        {% elif form.errors %}
         <p class="fit-alert" role="alert">Incorrect username or password.</p>
         {% endif %}
         <div class="fit-field">

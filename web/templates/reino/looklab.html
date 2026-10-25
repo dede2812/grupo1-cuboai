@@ -213,6 +213,7 @@
         {% if main %}
         <form method="post" action="{% url 'reino_looklab_add' reino_store.slug %}" data-reveal-form class="reveal">
             {% csrf_token %}
+            <input type="hidden" name="action_id" value="{{ action_id }}">
 
             {# ----- P08: la foto principal DOMINA; etiquetas mínimas ----- #}
             <div class="reveal__photo pop-in">

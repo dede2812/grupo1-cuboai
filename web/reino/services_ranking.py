@@ -26,8 +26,8 @@ WEIGHTS_V1 = {"intent": Decimal("0.35"), "prefs": Decimal("0.25"),
 def _score_intent(product, intent):
     """Coincidencia con lo pedido: ocasión/estilo/categoría (0..1)."""
     hits = total = 0
-    occasions = set(intent.get("occasions") or [])
-    styles = set(intent.get("styles") or [])
+    occasions = set(intent.get("occasions") or ([intent["occasion"]] if intent.get("occasion") else []))
+    styles = set(intent.get("styles") or ([intent["style"]] if intent.get("style") else []))
     category = (intent.get("category") or "").lower()
     if occasions:
         total += 1

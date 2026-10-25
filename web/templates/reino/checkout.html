@@ -54,12 +54,14 @@
                 <label>Métodos habilitados</label>
                 <div class="pill-row">
                     <label class="pill"><input type="radio" name="payment_method" value="manual" checked>
-                        Pago manual coordinado</label>
+                        {% if payment_options %}Pago estándar{% else %}Pago manual coordinado{% endif %}</label>
                     <label class="pill"><input type="radio" name="payment_method" value="bitcoin">
                         Bitcoin · 15 % de descuento al verificar</label>
                 </div>
-                <p class="help">El pedido queda registrado como <strong>pendiente de pago</strong> hasta que el equipo lo verifica.
-                Ningún cobro electrónico está habilitado en esta tienda.</p>
+                <p class="help">El pedido queda registrado como <strong>pendiente de pago</strong>.
+                {% if payment_options %}Después de revisarlo podrás elegir {% for option in payment_options %}{{ option.label }}{% if option.test %} (pruebas){% endif %}{% if not forloop.last %}, {% endif %}{% endfor %}.
+                El pago se confirma al comprobarlo con el proveedor. Los pedidos con descuento Bitcoin deben pagarse con ese método.
+                {% else %}El equipo coordina y verifica el pago manual. Ningún cobro electrónico está habilitado para esta selección.{% endif %}</p>
             </div>
         </div>
 

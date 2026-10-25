@@ -12,6 +12,7 @@ Reglas:
 from datetime import timedelta
 
 from django.db import transaction
+from django.db.models import Sum
 from django.utils import timezone
 
 from .models import (Booking, DigitalAsset, DigitalGrant, Order, OrderEvent,
@@ -26,20 +27,21 @@ class FulfillmentError(Exception):
 
 def reserve_service_slots(order):
     """Crea las reservas de las líneas con franja elegida (capacidad real)."""
-    for item in order.items.select_related("service_slot", "variant__product"):
-        slot = item.service_slot
-        if slot is None:
-            continue
+    demand = order.items.filter(service_slot__isnull=False).values("service_slot_id").annotate(units=Sum("quantity"))
+    for item in demand.order_by("service_slot_id"):
         with transaction.atomic():
-            locked = ServiceSlot.objects.select_for_update().get(pk=slot.pk)
-            if not locked.is_active or locked.booked + item.quantity > locked.capacity:
+            locked = ServiceSlot.objects.select_for_update().get(pk=item["service_slot_id"])
+            if Booking.objects.filter(slot=locked, order=order).exists():
+                continue
+            if (locked.product.store_id != order.store_id or not locked.is_active or
+                locked.starts_at <= timezone.now() or locked.booked + item["units"] > locked.capacity):
                 raise FulfillmentError(
-                    f"La franja de «{item.variant.product.short_title}» ya no tiene "
+                    f"La franja de «{locked.product.short_title}» ya no tiene "
                     f"cupo. Elegí otra hora; no cobramos por algo que no podemos dar.")
-            locked.booked += item.quantity
+            locked.booked += item["units"]
             locked.save(update_fields=["booked"])
             Booking.objects.create(
-                slot=locked, order=order, buyer_email=getattr(order, "customer_email", "") or "sin-correo@local")
+                slot=locked, order=order, quantity=item["units"], buyer_email=getattr(order, "customer_email", "") or "sin-correo@local")
 
 
 def release_service_slots(order, user=None, reason="Cancelación"):
@@ -50,7 +52,7 @@ def release_service_slots(order, user=None, reason="Cancelación"):
             if b.status == Booking.Status.CANCELLED:
                 continue  # repetición: no-op
             slot = ServiceSlot.objects.select_for_update().get(pk=b.slot_id)
-            slot.booked = max(0, slot.booked - 1)
+            slot.booked = max(0, slot.booked - b.quantity)
             slot.save(update_fields=["booked"])
             b.status = Booking.Status.CANCELLED
             b.save(update_fields=["status"])
@@ -65,7 +67,7 @@ def grant_digital_entitlements(order, user=None):
     created = []
     digital_products = [item.variant.product for item in
                         order.items.select_related("variant__product")
-                        if item.variant and item.variant.product.offer_type == "digital"]
+                        if item.variant and item.offer_type == "digital"]
     for product in digital_products:
         for asset in DigitalAsset.objects.filter(product=product, is_active=True):
             grant, was_created = DigitalGrant.objects.get_or_create(
@@ -89,6 +91,9 @@ def authorized_download(token):
              .select_related("asset", "order").first())
     if grant is None:
         return None, "Ese enlace de descarga no es válido."
+    if (not grant.asset.is_active or grant.order.status == "cancelled" or
+        grant.order.payment_status not in ("paid", "partially_refunded")):
+        return None, "El estado actual del pedido no permite esta descarga."
     if grant.expires_at < timezone.now():
         return None, "Ese enlace de descarga venció. Escribinos y lo renovamos."
     if grant.downloads >= grant.max_downloads:
@@ -99,7 +104,11 @@ def authorized_download(token):
 def register_download(grant):
     """Cuenta la descarga de forma atómica (límite bajo concurrencia)."""
     from django.db.models import F
-    (DigitalGrant.objects.filter(pk=grant.pk, downloads__lt=grant.max_downloads)
-     .update(downloads=F("downloads") + 1))
+    updated = (DigitalGrant.objects.filter(pk=grant.pk, downloads__lt=F("max_downloads"),
+        expires_at__gt=timezone.now(), asset__is_active=True,
+        order__payment_status__in=("paid", "partially_refunded"))
+        .exclude(order__status="cancelled").update(downloads=F("downloads") + 1))
+    if not updated:
+        raise FulfillmentError("La descarga ya no está disponible o llegó a su límite.")
     grant.refresh_from_db()
     return grant.downloads

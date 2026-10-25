@@ -2,6 +2,10 @@ import os
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+LANGUAGE_CODE = "es-sv"
+FORMAT_MODULE_PATH = "config.formats"
+TIME_ZONE = os.environ.get("REINO_TIME_ZONE", "America/El_Salvador")
+USE_TZ = True
 
 
 def _load_dotenv():
@@ -58,6 +62,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "config.middleware.StoreLocaleMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
@@ -164,7 +169,24 @@ REINO_AI = {
     "MODEL": os.environ.get("REINO_AI_MODEL", "gpt-4o-mini"),
     "TIMEOUT_SECONDS": float(os.environ.get("REINO_AI_TIMEOUT", "12")),
     "MAX_TOOL_ROUNDS": 4,
+    "MAX_COMPLETION_TOKENS": int(os.environ.get("REINO_AI_MAX_COMPLETION_TOKENS", "600")),
+    "MAX_CONTEXT_CHARS": int(os.environ.get("REINO_AI_MAX_CONTEXT_CHARS", "32000")),
+    "MAX_INPUT_CHARS": int(os.environ.get("REINO_AI_MAX_INPUT_CHARS", "8000")),
+    "MAX_TOOL_CALLS": int(os.environ.get("REINO_AI_MAX_TOOL_CALLS", "12")),
+    "SESSION_HOURLY_LIMIT": int(os.environ.get("REINO_AI_SESSION_HOURLY_LIMIT", "120")),
+    "STORE_DAILY_LIMIT": int(os.environ.get("REINO_AI_STORE_DAILY_LIMIT", "2000")),
 }
+# Shared database cache in deployed environments; provision with createcachetable.
+CACHES = {"default": {
+    "BACKEND": "django.core.cache.backends.db.DatabaseCache" if _IS_PROD else "django.core.cache.backends.locmem.LocMemCache",
+    "LOCATION": "reino_cache" if _IS_PROD else "reino-development",
+}}
+AUTH_PASSWORD_VALIDATORS = [
+    {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
+    {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
+    {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
+    {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
+]
 # Reserva de stock durante el checkout (minutos).
 REINO_RESERVATION_MINUTES = int(os.environ.get("REINO_RESERVATION_MINUTES", "10"))
 

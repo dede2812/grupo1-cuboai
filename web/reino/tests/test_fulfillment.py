@@ -93,6 +93,57 @@ class DigitalDownloadTests(FulfillmentBase):
         r2 = other.get(f"/s/{self.store_b.slug}/descargar/{grant.token}/")
         self.assertEqual(r2.status_code, 403)
 
+    def test_digital_entitlement_uses_purchase_snapshot_after_catalog_edit(self):
+        order = self._buy_ebook("digital-snapshot")
+        self.ebook.offer_type = "physical"
+        self.ebook.save(update_fields=["offer_type"])
+        c.apply_transition(order, "payment_status", "paid", note="TEST-SNAPSHOT")
+        self.assertEqual(order.items.get().offer_type, "digital")
+        self.assertEqual(DigitalGrant.objects.filter(order=order).count(), 1)
+
+    def test_stale_download_grant_cannot_exceed_limit(self):
+        order = self._buy_ebook("digital-limit")
+        c.apply_transition(order, "payment_status", "paid", note="TEST-LIMIT")
+        DigitalGrant.objects.filter(order=order).update(max_downloads=1)
+        first = DigitalGrant.objects.get(order=order)
+        stale = DigitalGrant.objects.get(order=order)
+        self.assertEqual(f.register_download(first), 1)
+        with self.assertRaises(f.FulfillmentError):
+            f.register_download(stale)
+        first.refresh_from_db()
+        self.assertEqual(first.downloads, 1)
+
+    def test_refund_revokes_download_even_for_previously_loaded_grant(self):
+        order = self._buy_ebook("digital-refund")
+        c.apply_transition(order, "payment_status", "paid", note="TEST-PAID")
+        grant = DigitalGrant.objects.get(order=order)
+        self.assertIsNone(f.authorized_download(grant.token)[1])
+        c.apply_transition(order, "payment_status", "refunded", note="TEST-REFUND",
+                           refund_amount=order.total)
+        self.assertIsNone(f.authorized_download(grant.token)[0])
+        with self.assertRaises(f.FulfillmentError):
+            f.register_download(grant)
+        grant.refresh_from_db()
+        self.assertEqual(grant.downloads, 0)
+
+    def test_expired_inactive_and_cancelled_downloads_are_rechecked(self):
+        order = self._buy_ebook("digital-unavailable")
+        c.apply_transition(order, "payment_status", "paid", note="TEST-PAID")
+        grant = DigitalGrant.objects.get(order=order)
+        cases = (
+            (DigitalGrant.objects.filter(pk=grant.pk), {"expires_at": timezone.now() - timedelta(seconds=1)},
+             {"expires_at": timezone.now() + timedelta(days=1)}),
+            (DigitalAsset.objects.filter(pk=grant.asset_id), {"is_active": False}, {"is_active": True}),
+            (Order.objects.filter(pk=order.pk), {"status": "cancelled"}, {"status": "placed"}),
+        )
+        for queryset, invalid, restore in cases:
+            with self.subTest(invalid=invalid):
+                queryset.update(**invalid)
+                self.assertIsNone(f.authorized_download(grant.token)[0])
+                with self.assertRaises(f.FulfillmentError):
+                    f.register_download(grant)
+                queryset.update(**restore)
+
 
 class ServiceBookingTests(FulfillmentBase):
     def _buy_seat(self, session):
@@ -141,6 +192,64 @@ class ServiceBookingTests(FulfillmentBase):
         cart2 = c.get_open_cart(self.store_b, "mix-2", create=True)
         c.add_item(cart2, self.ebook_v, 1)
         self.assertFalse(c.cart_requires_shipping(cart2))
+
+    def test_multiple_variants_share_capacity_and_release_exact_quantities_once(self):
+        self.slot.capacity = 3
+        self.slot.save(update_fields=["capacity"])
+        second = Variant.objects.create(product=self.pase, sku="TALLER-2", stock=5)
+        cart = c.get_open_cart(self.store_b, "group-service", create=True)
+        c.add_item(cart, self.pase_v, 2, service_slot=self.slot)
+        c.add_item(cart, second, 1, service_slot=self.slot)
+        checkout = c.prepare_checkout(cart, "manual", idempotency_key="group-service")
+        order = c.confirm_checkout(checkout, {"name": "Prueba", "email": "test@example.invalid"},
+                                   checkout.idempotency_key)
+        self.slot.refresh_from_db()
+        self.assertEqual(self.slot.booked, 3)
+        self.assertEqual(Booking.objects.get(order=order).quantity, 3)
+        f.reserve_service_slots(order)
+        self.slot.refresh_from_db()
+        self.assertEqual(self.slot.booked, 3)
+        c.apply_transition(order, "status", "cancelled")
+        c.apply_transition(order, "status", "cancelled")
+        self.slot.refresh_from_db()
+        self.assertEqual(self.slot.booked, 0)
+
+    def test_shared_slot_over_capacity_rolls_back_order_and_inventory(self):
+        self.slot.capacity = 2
+        self.slot.save(update_fields=["capacity"])
+        second = Variant.objects.create(product=self.pase, sku="OVER-CAPACITY", stock=5)
+        cart = c.get_open_cart(self.store_b, "over-capacity", create=True)
+        c.add_item(cart, self.pase_v, 2, service_slot=self.slot)
+        c.add_item(cart, second, 1, service_slot=self.slot)
+        checkout = c.prepare_checkout(cart, "manual", idempotency_key="over-capacity")
+        with self.assertRaises(f.FulfillmentError):
+            c.confirm_checkout(checkout, {"name": "Prueba", "email": "test@example.invalid"},
+                               checkout.idempotency_key)
+        self.slot.refresh_from_db()
+        self.pase_v.refresh_from_db()
+        second.refresh_from_db()
+        self.assertEqual(self.slot.booked, 0)
+        self.assertEqual(self.pase_v.stock, 50)
+        self.assertEqual(second.stock, 5)
+        self.assertFalse(Booking.objects.exists())
+        self.assertFalse(Order.objects.filter(cart=cart).exists())
+
+    def test_service_quantity_string_is_validated_before_capacity(self):
+        cart = c.get_open_cart(self.store_b, "service-string", create=True)
+        with self.assertRaises(c.CartError):
+            c.add_item(cart, self.pase_v, "invalid", service_slot=self.slot)
+        c.add_item(cart, self.pase_v, "1", service_slot=self.slot)
+        self.assertEqual(cart.items.get().quantity, 1)
+
+    def test_changing_slot_does_not_silently_book_previous_time(self):
+        cart = c.get_open_cart(self.store_b, "service-slot-change", create=True)
+        alternate = ServiceSlot.objects.create(
+            product=self.pase, starts_at=timezone.now() + timedelta(days=8), capacity=5)
+        c.add_item(cart, self.pase_v, 1, service_slot=self.slot)
+        with self.assertRaises(c.CartError):
+            c.add_item(cart, self.pase_v, 1, service_slot=alternate)
+        self.assertEqual(cart.items.get().service_slot_id, self.slot.pk)
+        self.assertEqual(cart.items.get().quantity, 1)
 
 
 class MultiCategoryTests(ReinoTestCase):

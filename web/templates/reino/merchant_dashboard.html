@@ -28,15 +28,17 @@
 </div>
 
 <h2>Indicadores</h2>
+<p><a class="btn btn--secondary" href="{% url 'reino_business_dashboard' store.slug %}">Abrir estadísticas y reportes</a></p>
 {% if kpis %}
 <div class="kpi-grid">
-    <div class="kpi"><div class="n">${{ kpis.ventas|floatformat:2 }}</div><div class="l">Ventas cobradas (productos + envío)</div></div>
+    <div class="kpi"><div class="n">{% if kpis.ventas is not None %}${{ kpis.ventas|floatformat:2 }}{% else %}Sin datos suficientes{% endif %}</div><div class="l">Cobros menos reembolsos (incluye envío)</div></div>
     <div class="kpi"><div class="n">{{ kpis.pedidos_pagados }}</div><div class="l">Pedidos pagados</div></div>
-    <div class="kpi"><div class="n">${{ kpis.ticket_medio|floatformat:2 }}</div><div class="l">Ticket medio</div></div>
+    <div class="kpi"><div class="n">${{ kpis.ticket_medio|floatformat:2 }}</div><div class="l">Ticket medio antes de reembolsos</div></div>
     <div class="kpi"><div class="n">{{ kpis.pendientes }}</div><div class="l">Pendientes de cobro</div></div>
 </div>
 <p class="small muted">Período: histórico completo · Moneda: {{ store.currency }}.
 Las cifras cuentan solo pedidos con pago verificado.</p>
+{% if other_currency_orders %}<p class="small muted">{{ other_currency_orders }} pedido(s) en otra moneda excluidos de los importes; no se aplica una conversión estimada.</p>{% endif %}
 {% else %}
 <div class="empty-state" style="padding:32px">
     <h3>Sin datos suficientes.</h3>

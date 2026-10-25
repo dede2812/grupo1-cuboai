@@ -1,3 +1,5 @@
+> Evidencia histórica: los resultados y pendientes de este informe corresponden a su fase y entorno originales. Para la ejecución actual consultar [Pruebas y resultados](12_PRUEBAS_Y_RESULTADOS.md) y [Instalación](11_INSTALACION_Y_DESPLIEGUE.md). No sumar sus conteos a los nuevos.
+
 # 05 · Calidad y despliegue (F9)
 
 ## Pruebas ejecutadas (evidencia real, 23-oct-2026, sandbox linux/arm64)

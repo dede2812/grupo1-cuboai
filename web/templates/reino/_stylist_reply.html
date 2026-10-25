@@ -7,10 +7,10 @@
     <div class="chat__cards">
         {% for card in reply.cards %}
         <article class="card">
-            {% if card.image %}<div class="card__media"><img src="{% static card.image %}" alt="{{ card.alt }}" loading="lazy"></div>{% endif %}
+            {% if card.image_url %}<div class="card__media"><img src="{{ card.image_url }}" alt="{{ card.alt }}" loading="lazy"></div>{% elif card.image %}<div class="card__media"><img src="{% static card.image %}" alt="{{ card.alt }}" loading="lazy"></div>{% endif %}
             <div class="card__body">
                 <h3 class="card__title">{{ card.title }}</h3>
-                <p class="card__price">{{ card.price }}</p>
+                <p class="card__price">{% if card.price_kind == "from" %}Desde {% endif %}{{ card.price }}{% if card.option %} · {{ card.option }}{% endif %}</p>
                 {% if card.fit_label %}<p class="mb-0"><span class="fit fit--{{ card.fit_state }}">{{ card.fit_label }}</span></p>{% endif %}
                 {% if card.reason_codes %}<p class="card__reason">{% for c in card.reason_codes %}{{ c|reason_label }}{% if not forloop.last %} · {% endif %}{% endfor %}</p>{% endif %}
                 <div class="card__footer">

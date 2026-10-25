@@ -22,15 +22,17 @@
                 <option value="diario" {% if occasion == "diario" %}selected{% endif %}>Diario</option>
             </select>
             <label class="pill" style="gap:8px">Hasta $
-                <input type="number" name="max" value="{{ max }}" min="1" step="1" aria-label="Precio máximo"
+                <input type="number" name="max" value="{{ max_price }}" min="0" step="0.01" aria-label="Precio máximo"
                        style="width:76px;border:0;background:transparent;font:inherit;font-weight:700">
             </label>
+            {% if category %}<input type="hidden" name="categoria" value="{{ category }}"><span class="pill">Categoría: {{ category }}</span>{% endif %}
             <button class="pill" type="submit">Aplicar filtros</button>
             {% if searched %}<a class="pill" href="{% url 'reino_search' %}">Limpiar</a>{% endif %}
         </div>
     </form>
 
-    {% if searched %}
+    {% if price_error %}<p class="error" role="alert">{{ price_error }}</p>{% endif %}
+    {% if searched and not price_error %}
     <p class="muted" style="margin-top:22px" role="status">
         {{ results|length }} resultado{{ results|length|pluralize }}{% if q %} para «{{ q }}»{% endif %}{% if max_price %} hasta ${{ max_price }}{% endif %}{% if occasion %} · {{ occasion }}{% endif %}
     </p>
@@ -60,7 +62,7 @@
         <p class="lede" style="margin-inline:auto">Probá <a href="{% url 'reino_search' %}">quitar los filtros</a> o entrá a <a href="{% url 'reino_directory' %}">una tienda</a>.</p>
     </div>
     {% endif %}
-    {% else %}
+    {% elif not price_error %}
     <p class="lede" style="margin-top:18px">Ejemplos que ya entiende la búsqueda por reglas:</p>
     <div class="pill-row">
         {% for e in examples %}<a class="pill" href="?q={{ e|urlencode }}">{{ e }}</a>{% endfor %}

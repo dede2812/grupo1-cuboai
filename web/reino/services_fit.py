@@ -45,14 +45,18 @@ class SimpleMeasurement:
 
 def to_cm(value, unit):
     """Convierte un valor a cm; lanza InvalidMeasurement si no es un número válido."""
+    if unit not in ("cm", "in"):
+        raise InvalidMeasurement("Elegí centímetros o pulgadas.")
     try:
-        v = Decimal(str(value).strip())
+        v = Decimal(str(value).strip().replace(",", "."))
     except (InvalidOperation, AttributeError):
         raise InvalidMeasurement("Ingresá un número válido.") from None
-    if v <= 0 or v > Decimal("200"):
-        raise InvalidMeasurement("La medida debe estar entre 0 y 200 cm (79 in).")
+    if not v.is_finite():
+        raise InvalidMeasurement("Ingresá un número válido.")
     if unit == "in":
         v = v * IN_TO_CM
+    if v <= 0 or v > Decimal("200") or v < Decimal("0.05"):
+        raise InvalidMeasurement("La medida debe ser mayor que 0 y no superar 200 cm.")
     return v.quantize(Decimal("0.1"))
 
 
@@ -70,6 +74,11 @@ def evaluate(product, chest_cm=None, neck_cm=None, back_cm=None):
 
     Devuelve dict con estado, candidatas, explicación y datos faltantes.
     """
+    # API, formulario y herramienta comparten el mismo límite físico.
+    chest_cm, neck_cm, back_cm = (
+        to_cm(v, "cm") if v is not None else None
+        for v in (chest_cm, neck_cm, back_cm)
+    )
     rule = active_rule(product)
     if rule is None or not rule.ranges:
         return {
